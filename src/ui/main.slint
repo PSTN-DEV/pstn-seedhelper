@@ -1,0 +1,1189 @@
+import { LineEdit, ComboBox, ScrollView } from "std-widgets.slint";
+
+// ── Design tokens ──────────────────────────────────────────────────────────────
+// bg-app:        #1c1c1c   bg-title:      #141414   bg-panel:      #252525
+// bg-inset:      #1a1a1a   tab-active:    #3c3c3c   text-primary:  #e5e5e5
+// text-secondary:#929292   text-muted:    #6b6b6b   text-disabled: #555555
+// brand-red:     #c13520   green-btn:     #3ca96e   green-btn-fg:  #101c12
+// blue-toggle:   #4a6bd4   green-accent:  #4ac87a   red-exit-bg:   #3a2020
+// red-exit-brd:  #ae3c2c80 red-exit-fg:   #d4816e   green-bar:     #2e9860
+// red-bar:       #b04030   border-subtle: #ffffff10
+
+export struct ServerStatus {
+    name: string,
+    online: bool,
+    players: int,
+    max-players: int,
+    queue: int,
+    map: string,
+    faction1: string,
+    faction2: string,
+}
+
+// ── ToggleSwitch ───────────────────────────────────────────────────────────────
+
+component ToggleSwitch inherits Rectangle {
+    in-out property <bool> checked: false;
+    callback toggled(bool);
+
+    width: 42px;
+    height: 24px;
+    border-radius: 12px;
+    background: checked ? #4a6bd4 : #333333;
+
+    ta := TouchArea {
+        clicked => { root.checked = !root.checked; root.toggled(root.checked); }
+        mouse-cursor: pointer;
+    }
+
+    thumb := Rectangle {
+        x: root.checked ? 20px : 2px;
+        y: 2px;
+        width: 20px; height: 20px;
+        border-radius: 10px;
+        background: #f5f5f5;
+        animate x { duration: 150ms; easing: ease-in-out; }
+    }
+}
+
+// ── ModeToggleRow ──────────────────────────────────────────────────────────────
+
+component ModeToggleRow inherits HorizontalLayout {
+    in property <string> label: "";
+    in property <string> hint: "";
+    in-out property <bool> checked: false;
+    callback toggled(bool);
+
+    height: 48px;
+    spacing: 0px;
+    alignment: space-between;
+    padding-bottom: 16px;
+
+    VerticalLayout {
+        alignment: center;
+        spacing: 2px;
+        Text { text: root.label; color: #c9c9c9; font-size: 13.5px; font-weight: 600; }
+        Text { text: root.hint;  color: #555555; font-size: 12px; }
+    }
+    ToggleSwitch { checked <=> root.checked; toggled(v) => { root.toggled(v); } }
+}
+
+// ── TimeSelector ───────────────────────────────────────────────────────────────
+
+component TimeSelector inherits HorizontalLayout {
+    in-out property <int> hour: 0;
+    in-out property <int> minute: 0;
+
+    spacing: 3px;
+    height: 34px;
+    alignment: center;
+
+    // Hour box
+    Rectangle {
+        width: 56px; height: 34px;
+        background: #252525; border-radius: 7px;
+        border-width: 1px; border-color: #ffffff10;
+        clip: true;
+
+        HorizontalLayout {
+            spacing: 0px;
+            VerticalLayout {
+                horizontal-stretch: 1;
+                alignment: center;
+                padding-left: 10px;
+                Text {
+                    text: root.hour < 10 ? "0\{root.hour}" : "\{root.hour}";
+                    font-family: "JetBrains Mono"; font-size: 14px; font-weight: 600;
+                    color: #e5e5e5; vertical-alignment: center;
+                }
+            }
+            Rectangle { width: 1px; background: #ffffff10; }
+            VerticalLayout {
+                width: 20px;
+                Rectangle {
+                    vertical-stretch: 1;
+                    background: hu.has-hover ? #ffffff0d : transparent;
+                    hu := TouchArea {
+                        clicked => { root.hour = root.hour >= 23 ? 0 : root.hour + 1; }
+                        mouse-cursor: pointer;
+                    }
+                    Text { text: "▲"; font-size: 6px; color: #6b6b6b; horizontal-alignment: center; vertical-alignment: center; }
+                }
+                Rectangle { height: 1px; background: #ffffff10; }
+                Rectangle {
+                    vertical-stretch: 1;
+                    background: hd.has-hover ? #ffffff0d : transparent;
+                    hd := TouchArea {
+                        clicked => { root.hour = root.hour <= 0 ? 23 : root.hour - 1; }
+                        mouse-cursor: pointer;
+                    }
+                    Text { text: "▼"; font-size: 6px; color: #6b6b6b; horizontal-alignment: center; vertical-alignment: center; }
+                }
+            }
+        }
+    }
+
+    Text { text: ":"; color: #4a4a4a; font-size: 16px; font-weight: 700; vertical-alignment: center; }
+
+    // Minute box (steps of 5)
+    Rectangle {
+        width: 56px; height: 34px;
+        background: #252525; border-radius: 7px;
+        border-width: 1px; border-color: #ffffff10;
+        clip: true;
+
+        HorizontalLayout {
+            spacing: 0px;
+            VerticalLayout {
+                horizontal-stretch: 1;
+                alignment: center;
+                padding-left: 10px;
+                Text {
+                    text: root.minute < 10 ? "0\{root.minute}" : "\{root.minute}";
+                    font-family: "JetBrains Mono"; font-size: 14px; font-weight: 600;
+                    color: #e5e5e5; vertical-alignment: center;
+                }
+            }
+            Rectangle { width: 1px; background: #ffffff10; }
+            VerticalLayout {
+                width: 20px;
+                Rectangle {
+                    vertical-stretch: 1;
+                    background: mu.has-hover ? #ffffff0d : transparent;
+                    mu := TouchArea {
+                        clicked => { root.minute = root.minute >= 55 ? 0 : root.minute + 5; }
+                        mouse-cursor: pointer;
+                    }
+                    Text { text: "▲"; font-size: 6px; color: #6b6b6b; horizontal-alignment: center; vertical-alignment: center; }
+                }
+                Rectangle { height: 1px; background: #ffffff10; }
+                Rectangle {
+                    vertical-stretch: 1;
+                    background: md.has-hover ? #ffffff0d : transparent;
+                    md := TouchArea {
+                        clicked => { root.minute = root.minute <= 0 ? 55 : root.minute - 5; }
+                        mouse-cursor: pointer;
+                    }
+                    Text { text: "▼"; font-size: 6px; color: #6b6b6b; horizontal-alignment: center; vertical-alignment: center; }
+                }
+            }
+        }
+    }
+}
+
+// ── SliderRow ──────────────────────────────────────────────────────────────────
+
+component SliderRow inherits HorizontalLayout {
+    in property <string> label: "";
+    in property <string> hint: "";
+    in property <string> unit: "";
+    in-out property <int> value: 0;
+    in property <int> minimum: 0;
+    in property <int> maximum: 100;
+    in property <int> step: 1;
+
+    height: 54px;
+    spacing: 16px;
+    padding-bottom: 12px;
+
+    private property <float> fill-ratio: root.maximum > root.minimum
+        ? (root.value - root.minimum) * 1.0 / (root.maximum - root.minimum)
+        : 0.0;
+
+    VerticalLayout {
+        alignment: center;
+        spacing: 2px;
+        width: 200px;
+        Text { text: root.label; color: #929292; font-size: 13.5px; }
+        if root.hint != "" : Text { text: root.hint; color: #444444; font-size: 11px; wrap: word-wrap; }
+    }
+
+    Text {
+        width: 48px;
+        text: "\{root.value}\{root.unit}";
+        font-family: "JetBrains Mono"; font-size: 12.5px; font-weight: 600;
+        color: #e5e5e5; horizontal-alignment: right; vertical-alignment: center;
+    }
+
+    VerticalLayout {
+        horizontal-stretch: 1;
+        alignment: center;
+
+        track-r := Rectangle {
+            height: 5px;
+            border-radius: 2.5px;
+            background: #2c2c2c;
+
+            Rectangle {
+                x: 0px; y: 0px;
+                height: parent.height;
+                width: parent.width * root.fill-ratio;
+                border-radius: 2.5px;
+                background: #4a6bd4;
+            }
+
+            Rectangle {
+                x: clamp(parent.width * root.fill-ratio - 7px, 0px, parent.width - 14px);
+                y: (parent.height - 14px) / 2;
+                width: 14px; height: 14px;
+                border-radius: 7px;
+                background: sli.has-hover || sli.pressed ? #ffffff : #d4d4d4;
+                animate background { duration: 80ms; }
+            }
+
+            sli := TouchArea {
+                y: -9px; height: 23px;
+                mouse-cursor: ew-resize;
+
+                pointer-event(e) => {
+                    if (e.kind == PointerEventKind.down) {
+                        root.value = root.minimum + round(clamp(self.mouse-x / self.width, 0.0, 1.0) * (root.maximum - root.minimum) / root.step) * root.step;
+                        if (root.value > root.maximum) { root.value = root.maximum; }
+                        if (root.value < root.minimum) { root.value = root.minimum; }
+                    }
+                }
+                moved => {
+                    if (self.pressed) {
+                        root.value = root.minimum + round(clamp(self.mouse-x / self.width, 0.0, 1.0) * (root.maximum - root.minimum) / root.step) * root.step;
+                        if (root.value > root.maximum) { root.value = root.maximum; }
+                        if (root.value < root.minimum) { root.value = root.minimum; }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ── SettingsRow ────────────────────────────────────────────────────────────────
+
+component SettingsRow inherits HorizontalLayout {
+    in property <string> label: "";
+    spacing: 16px;
+    height: 42px;
+    padding-bottom: 14px;
+
+    Text {
+        text: root.label; color: #929292; font-size: 13.5px;
+        vertical-alignment: center; width: 200px;
+    }
+    @children
+}
+
+// ── ServerRow ──────────────────────────────────────────────────────────────────
+
+component ServerRow inherits Rectangle {
+    in property <ServerStatus> status;
+    callback join();
+
+    height: 56px;
+    background: #252525; border-width: 1px; border-color: #ffffff0e; border-radius: 9px;
+
+    private property <float> fill-pct:
+        status.online ? (status.players * 1.0 / (status.max-players > 0 ? status.max-players : 100)) : 0.0;
+    private property <color> bar-color:
+        (status.online && status.players >= 20) ? #2e9860 : #b04030;
+
+    HorizontalLayout {
+        padding-left: 14px; padding-right: 14px; padding-top: 12px; padding-bottom: 12px;
+        spacing: 10px;
+
+        Text {
+            width: 100px; text: status.name;
+            font-family: "JetBrains Mono"; font-size: 13.5px; font-weight: 700;
+            color: #c9c9c9; vertical-alignment: center;
+        }
+
+        // Карта
+        Rectangle {
+            horizontal-stretch: 1; background: #1a1a1a; border-radius: 6px;
+            Text {
+                text: status.map != "" ? status.map : "—";
+                color: #505050; font-size: 12.5px;
+                horizontal-alignment: center; vertical-alignment: center; overflow: elide;
+            }
+        }
+
+        // Фракция 1
+        Rectangle {
+            horizontal-stretch: 1; background: #1a1a1a; border-radius: 6px;
+            Text {
+                text: status.faction1 != "" ? status.faction1 : "—";
+                color: #505050; font-size: 12px;
+                horizontal-alignment: center; vertical-alignment: center; overflow: elide;
+            }
+        }
+
+        // Фракция 2
+        Rectangle {
+            horizontal-stretch: 1; background: #1a1a1a; border-radius: 6px;
+            Text {
+                text: status.faction2 != "" ? status.faction2 : "—";
+                color: #505050; font-size: 12px;
+                horizontal-alignment: center; vertical-alignment: center; overflow: elide;
+            }
+        }
+
+        // Заполненность
+        Rectangle {
+            width: 130px; border-radius: 6px; background: #1a1a1a; clip: true;
+            Rectangle {
+                x: 0px; y: 0px;
+                width: parent.width * root.fill-pct;
+                height: parent.height;
+                background: root.bar-color;
+            }
+            Text {
+                x: 0px; y: 0px; width: parent.width; height: parent.height;
+                text: status.online
+                    ? (status.queue > 0
+                        ? "\{status.players}/\{status.max-players} (+\{status.queue})"
+                        : "\{status.players}/\{status.max-players}")
+                    : "Офлайн";
+                color: #eee0dc; font-size: 12.5px; font-weight: 700;
+                horizontal-alignment: center; vertical-alignment: center;
+            }
+        }
+
+        // ПОДКЛЮЧИТЬСЯ
+        Rectangle {
+            width: 150px; border-radius: 6px; border-width: 1px;
+            border-color: jta.has-hover ? #c9c9c9 : #ffffff1e;
+            background: jta.has-hover ? #ffffff0d : transparent;
+            jta := TouchArea { clicked => { root.join(); } mouse-cursor: pointer; }
+            Text {
+                text: "ПОДКЛЮЧИТЬСЯ"; color: #c9c9c9; font-size: 12px; font-weight: 600;
+                horizontal-alignment: center; vertical-alignment: center;
+            }
+        }
+    }
+}
+
+// ── StatusChip ─────────────────────────────────────────────────────────────────
+
+component StatusChip inherits HorizontalLayout {
+    in property <string> label: "";
+    in property <color>  dot-color: #6b6b6b;
+    in property <bool>   glowing: false;
+
+    spacing: 7px; alignment: center;
+
+    VerticalLayout {
+        width: 7px; alignment: center;
+        Rectangle {
+            width: 7px; height: 7px; border-radius: 3.5px;
+            background: root.dot-color;
+            drop-shadow-blur: root.glowing ? 6px : 0px;
+            drop-shadow-color: root.glowing ? root.dot-color.with-alpha(0.4) : transparent;
+        }
+    }
+    Text { text: root.label; color: root.dot-color; font-size: 12.5px; font-weight: 500; vertical-alignment: center; }
+}
+
+// ── SectionDivider ─────────────────────────────────────────────────────────────
+
+component SectionDivider inherits VerticalLayout {
+    in property <string> text: "";
+    spacing: 0px;
+    Rectangle { height: 6px; }
+    Text { text: root.text; color: #4ac87a; font-size: 12px; font-weight: 700; letter-spacing: 0.6px; }
+    Rectangle { height: 8px; }
+    Rectangle { height: 1px; background: #ffffff14; }
+    Rectangle { height: 14px; }
+}
+
+// ── AppWindow ──────────────────────────────────────────────────────────────────
+
+export component AppWindow inherits Window {
+    title: "PSTN Seed Helper v4.0";
+    icon: @image-url("../../icons/seeder.svg");
+    no-frame: true;
+    background: transparent;
+    min-width: 960px; max-width: 960px; preferred-width: 960px;
+    min-height: 720px; preferred-height: 760px;
+
+    // ── Data ──────────────────────────────────────────────────────────────
+
+    in-out property <[ServerStatus]> servers: [
+        { name: "PSTN#1", online: false, players: 0, max-players: 100, queue: 0, map: "", faction1: "", faction2: "" },
+        { name: "PSTN#2", online: false, players: 0, max-players: 100, queue: 0, map: "", faction1: "", faction2: "" },
+        { name: "PSTN#3", online: false, players: 0, max-players: 100, queue: 0, map: "", faction1: "", faction2: "" },
+        { name: "PSTN#4", online: false, players: 0, max-players: 100, queue: 0, map: "", faction1: "", faction2: "" },
+    ];
+
+    in-out property <string> log-text: "";
+    in-out property <bool>   seeding-active: false;
+    in-out property <bool>   stop-blocked: false;
+    in-out property <string> remote-seed-order: "";
+    in-out property <string> update-notice: "";
+    in-out property <bool>   show-confirm-exit: false;
+    in-out property <bool>   restore-toast-visible: false;
+
+    // cfg properties (Rust-bound — names must not change)
+    in-out property <string> cfg-launcher-path: "";
+    in-out property <string> cfg-steam-id: "";
+    in-out property <string> cfg-seed-order-override: "";   // kept for Rust compat, not shown in UI
+    in-out property <int>    cfg-desired-players: 65;
+    in-out property <int>    cfg-checkup-interval: 60;
+    in-out property <int>    cfg-game-launch-delay: 3;
+    in-out property <int>    cfg-time-limit: 17;
+    in-out property <int>    cfg-time-limit-minute: 0;
+    in-out property <bool>   cfg-time-limit-enabled: true;
+    in-out property <int>    cfg-startup-wait: 2;
+    in-out property <bool>   cfg-start-on-startup: false;
+    in-out property <bool>   cfg-auto-start: false;
+    in-out property <bool>   cfg-render-toggle: false;
+    in-out property <bool>   cfg-auto-create-squad: true;
+    in-out property <bool>   cfg-disable-sound: true;
+    in-out property <bool>   cfg-delete-startup-video: false;
+    in-out property <bool>   cfg-eco-mode: false;
+    in-out property <string> cfg-preferred-fps: "";       // empty = None (Squad default)
+    in-out property <string> cfg-preferred-menu-fps: ""; // empty = None (Squad default)
+    in-out property <bool>   cfg-advanced-mode: false;
+    in-out property <string> cfg-after-action: "Ничего";
+    in-out property <int>    cfg-stop-after: 0;
+    in-out property <string> cfg-scheduled-shutdown: "";    // kept for Rust compat
+    in-out property <int>    cfg-shutdown-hour: 0;
+    in-out property <int>    cfg-shutdown-minute: 0;
+    in-out property <bool>   cfg-shutdown-enabled: false;
+
+    // ── Callbacks ─────────────────────────────────────────────────────────
+
+    callback start-seed();
+    callback stop-seed();
+    callback stop-and-exit();
+    callback exit-app();
+    callback open-log();
+    callback browse-launcher();
+    callback save-settings();
+    callback reset-settings();
+    callback test-join(int);
+    callback apply-update();
+    callback open-steam-account();
+    callback window-pressed();
+    callback window-drag(float, float);
+    callback window-minimize();
+    callback window-maximize();
+
+    // ── Internal state ────────────────────────────────────────────────────
+
+    private property <int>   active-tab: 0;
+    private property <int>   bottom-tab: 1;
+    private property <float> popup-alpha: 0.0;
+    animate popup-alpha { duration: 220ms; easing: ease-out; }
+    private property <float> restore-toast-alpha: restore-toast-visible ? 1.0 : 0.0;
+    animate restore-toast-alpha { duration: 220ms; easing: ease-out; }
+
+    // ── Shell ─────────────────────────────────────────────────────────────
+
+    Rectangle {
+        border-width: 1px; border-color: #ffffff0f;
+        border-radius: 14px; background: #1c1c1c; clip: true;
+
+    save-toast-timer := Timer {
+        interval: 2500ms;
+        running: false;
+        triggered => {
+            root.popup-alpha = 0.0;
+            save-toast-timer.running = false;
+        }
+    }
+
+    restore-toast-timer := Timer {
+        interval: 2500ms;
+        running: root.restore-toast-visible;
+        triggered => { root.restore-toast-visible = false; }
+    }
+
+    VerticalLayout { spacing: 0px; padding: 0px;
+
+        // ── Title bar ──────────────────────────────────────────────────────
+        Rectangle {
+            height: 36px;
+            background: #141414;
+
+            HorizontalLayout {
+                padding-left: 14px; padding-right: 0px; spacing: 8px;
+
+                VerticalLayout {
+                    width: 22px; alignment: center;
+                    Image {
+                        source: @image-url("../../icons/seeder.svg");
+                        width: 22px; height: 22px; image-fit: contain;
+                    }
+                }
+
+                VerticalLayout {
+                    alignment: center; spacing: 0px;
+                    Text { text: "PSTN Seed Helper"; color: #e5e5e5; font-size: 13px; font-weight: 600; }
+                    Text { text: "v4.0"; color: #6b6b6b; font-family: "JetBrains Mono"; font-size: 10px; }
+                }
+
+                drag-area := TouchArea {
+                    horizontal-stretch: 1;
+                    pointer-event(e) => { if (e.kind == PointerEventKind.down) { root.window-pressed(); } }
+                    moved => {
+                        if (self.pressed) {
+                            root.window-drag(
+                                (self.mouse-x - self.pressed-x) / 1px,
+                                (self.mouse-y - self.pressed-y) / 1px
+                            );
+                        }
+                    }
+                    double-clicked => { root.window-maximize(); }
+                }
+
+                Rectangle {
+                    width: 40px; height: 36px;
+                    background: minta.has-hover ? #2a2a2a : transparent;
+                    minta := TouchArea { clicked => { root.window-minimize(); } mouse-cursor: pointer; }
+                    Image {
+                        source: @image-url("../../icons/minus.svg");
+                        width: 11px; height: 11px;
+                        colorize: minta.has-hover ? #e5e5e5 : #6b6b6b;
+                        image-fit: contain;
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                    }
+                }
+
+                Rectangle {
+                    width: 40px; height: 36px;
+                    background: maxta.has-hover ? #2a2a2a : transparent;
+                    maxta := TouchArea { clicked => { root.window-maximize(); } mouse-cursor: pointer; }
+                    Image {
+                        source: @image-url("../../icons/square.svg");
+                        width: 11px; height: 11px;
+                        colorize: maxta.has-hover ? #e5e5e5 : #6b6b6b;
+                        image-fit: contain;
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                    }
+                }
+
+                Rectangle {
+                    width: 40px; height: 36px;
+                    background: clsta.has-hover ? #c42b1c : transparent;
+                    clsta := TouchArea { clicked => { root.exit-app(); } mouse-cursor: pointer; }
+                    Image {
+                        source: @image-url("../../icons/x.svg");
+                        width: 11px; height: 11px;
+                        colorize: clsta.has-hover ? #ffffff : #6b6b6b;
+                        image-fit: contain;
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                    }
+                }
+            }
+        }
+
+        // ── Update banner ──────────────────────────────────────────────────
+        if root.update-notice != "" : Rectangle {
+            height: 30px; background: #1d4ed8;
+            HorizontalLayout {
+                padding-left: 12px; padding-right: 8px; spacing: 8px; alignment: center;
+                Text { text: root.update-notice; color: white; font-size: 12px; vertical-alignment: center; horizontal-stretch: 1; }
+                Rectangle {
+                    width: 80px; height: 22px; background: #2563eb; border-radius: 4px;
+                    TouchArea { clicked => { root.apply-update(); } }
+                    Text { text: "Обновить"; color: white; font-size: 12px; horizontal-alignment: center; vertical-alignment: center; }
+                }
+            }
+        }
+
+        // ── Nav tabs ───────────────────────────────────────────────────────
+        Rectangle {
+            height: 42px; background: #141414;
+
+            HorizontalLayout {
+                padding: 5px; spacing: 0px;
+
+                Rectangle {
+                    height: 32px; background: #1c1c1c; border-radius: 10px;
+
+                    HorizontalLayout {
+                        padding: 4px; spacing: 5px;
+
+                        Rectangle {
+                            horizontal-stretch: 1; border-radius: 7px;
+                            background: root.active-tab == 0 ? #3c3c3c : (nav0.has-hover ? #ffffff08 : transparent);
+                            nav0 := TouchArea { clicked => { root.active-tab = 0; content-focus.focus(); } mouse-cursor: pointer; }
+                            Text {
+                                text: "Главная";
+                                color: root.active-tab == 0 ? #f5f5f5 : #6b6b6b;
+                                font-size: 13px; font-weight: 600;
+                                horizontal-alignment: center; vertical-alignment: center;
+                            }
+                        }
+
+                        Rectangle {
+                            horizontal-stretch: 1; border-radius: 7px;
+                            background: root.active-tab == 1 ? #3c3c3c : (nav1.has-hover ? #ffffff08 : transparent);
+                            nav1 := TouchArea { clicked => { root.active-tab = 1; content-focus.focus(); } mouse-cursor: pointer; }
+                            Text {
+                                text: "Настройки";
+                                color: root.active-tab == 1 ? #f5f5f5 : #6b6b6b;
+                                font-size: 13px; font-weight: 600;
+                                horizontal-alignment: center; vertical-alignment: center;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Rectangle { height: 1px; background: #ffffff0a; }
+
+        // ── Tab content ────────────────────────────────────────────────────
+        Rectangle { vertical-stretch: 1; clip: true;
+
+        content-focus := FocusScope {
+            x: 0; y: 0; width: parent.width; height: parent.height;
+            key-pressed(e) => { reject }
+
+        // ══════════════════════════════════════════════════════════════════
+        // ГЛАВНАЯ
+        // ══════════════════════════════════════════════════════════════════
+        VerticalLayout {
+            x: 0; y: 0; width: parent.width; height: parent.height;
+            visible: root.active-tab == 0;
+            spacing: 0px; padding: 16px; padding-top: 14px;
+
+            HorizontalLayout {
+                height: 44px; spacing: 10px;
+
+                Rectangle {
+                    horizontal-stretch: 1; border-radius: 9px;
+                    background: root.seeding-active
+                        ? (root.stop-blocked ? #5a2828 : (seedta.has-hover ? #b54040 : #a13a3a))
+                        : (seedta.has-hover ? #46c07a : #3ca96e);
+                    seedta := TouchArea {
+                        clicked => {
+                            if (root.seeding-active) {
+                                if (!root.stop-blocked) { root.stop-seed(); }
+                            } else { root.start-seed(); }
+                        }
+                        mouse-cursor: (root.seeding-active && root.stop-blocked) ? default : pointer;
+                    }
+                    Text {
+                        text: root.seeding-active ? "Остановить" : "Начать Seed";
+                        color: (root.seeding-active && root.stop-blocked) ? #7a5555 : (root.seeding-active ? #f5e5e0 : #101c12);
+                        font-size: 14.5px; font-weight: 700;
+                        horizontal-alignment: center; vertical-alignment: center; letter-spacing: 0.2px;
+                    }
+                }
+
+                Rectangle {
+                    horizontal-stretch: 1; border-radius: 9px;
+                    background: (!root.seeding-active || !root.stop-blocked) && extta.has-hover ? #4a2828 : #3a2020;
+                    border-width: 1px; border-color: #ae3c2c80;
+                    extta := TouchArea {
+                        clicked => {
+                            if (root.seeding-active) {
+                                if (!root.stop-blocked) { root.show-confirm-exit = true; }
+                            } else { root.exit-app(); }
+                        }
+                        mouse-cursor: (root.seeding-active && root.stop-blocked) ? default : pointer;
+                    }
+                    Text {
+                        text: root.seeding-active ? "Остановить и Выйти" : "Выйти";
+                        color: (root.seeding-active && root.stop-blocked) ? #7a5050 : #d4816e;
+                        font-size: 14.5px; font-weight: 700;
+                        horizontal-alignment: center; vertical-alignment: center;
+                    }
+                }
+
+                Rectangle {
+                    width: 150px; border-radius: 9px;
+                    background: logta.has-hover ? #2e2e2e : #272727;
+                    border-width: 1px; border-color: #ffffff0f;
+                    logta := TouchArea { clicked => { root.open-log(); } mouse-cursor: pointer; }
+                    Text {
+                        text: "ЛОГ ФАЙЛ";
+                        color: logta.has-hover ? #929292 : #555555;
+                        font-size: 13px; font-weight: 600;
+                        horizontal-alignment: center; vertical-alignment: center;
+                    }
+                }
+
+                Rectangle {
+                    width: 110px; border-radius: 9px;
+                    background: #272727; border-width: 1px; border-color: #ffffff0f;
+                    Text { text: "ЧаВо"; color: #555555; font-size: 13px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
+                }
+            }
+
+            Rectangle { height: 12px; }
+
+            Rectangle {
+                height: 44px; background: #252525; border-radius: 9px;
+                border-width: 1px; border-color: #ffffff0d;
+                HorizontalLayout {
+                    padding-left: 22px; padding-right: 22px; spacing: 0px; alignment: space-between;
+                    StatusChip {
+                        label: root.seeding-active ? "Seed Helper активен" : "Seed Helper выключен";
+                        dot-color: root.seeding-active ? #4ac87a : #6b6b6b;
+                        glowing: root.seeding-active;
+                    }
+                    StatusChip { label: "Squad не запущен"; dot-color: #6b6b6b; }
+                    StatusChip { label: "Не на сервере";    dot-color: #6b6b6b; }
+                    StatusChip { label: "Internet OK";       dot-color: #50cc7e; glowing: true; }
+                }
+            }
+
+            Rectangle { height: 14px; }
+
+            if root.remote-seed-order != "" : Text {
+                text: "Порядок: \{root.remote-seed-order}"; color: #6b6b6b; font-size: 12px; height: 16px;
+            }
+            HorizontalLayout {
+                height: 24px;
+                Text { text: "СТАТУС СЕРВЕРОВ"; color: #6b6b6b; font-size: 11.5px; font-weight: 600; letter-spacing: 0.6px; vertical-alignment: center; }
+            }
+
+            HorizontalLayout {
+                height: 24px; padding-left: 14px; padding-right: 14px; spacing: 10px;
+                Text { width: 100px; text: "Сервер";     color: #404040; font-size: 10.5px; font-weight: 600; vertical-alignment: center; }
+                Text { horizontal-stretch: 1; text: "Карта";     color: #404040; font-size: 10.5px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
+                Text { horizontal-stretch: 1; text: "Фракция 1"; color: #404040; font-size: 10.5px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
+                Text { horizontal-stretch: 1; text: "Фракция 2"; color: #404040; font-size: 10.5px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
+                Text { width: 130px; text: "Заполненность"; color: #404040; font-size: 10.5px; font-weight: 600; vertical-alignment: center; }
+                Text { width: 150px; text: ""; }
+            }
+
+            VerticalLayout {
+                spacing: 8px; padding-bottom: 12px;
+                ServerRow { status: root.servers[0]; join => { root.test-join(1); } }
+                ServerRow { status: root.servers[1]; join => { root.test-join(2); } }
+                ServerRow { status: root.servers[2]; join => { root.test-join(3); } }
+                ServerRow { status: root.servers[3]; join => { root.test-join(4); } }
+            }
+
+            HorizontalLayout {
+                height: 28px; spacing: 6px; alignment: start;
+                Rectangle {
+                    width: 80px; height: 28px; border-radius: 6px;
+                    background: root.bottom-tab == 0 ? #3c3c3c : (gta.has-hover ? #ffffff06 : transparent);
+                    gta := TouchArea { clicked => { root.bottom-tab = 0; } mouse-cursor: pointer; }
+                    Text { text: "График"; color: root.bottom-tab == 0 ? #e0e0e0 : #505050; font-size: 12px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
+                }
+                Rectangle {
+                    width: 60px; height: 28px; border-radius: 6px;
+                    background: root.bottom-tab == 1 ? #3c3c3c : (lta.has-hover ? #ffffff06 : transparent);
+                    lta := TouchArea { clicked => { root.bottom-tab = 1; } mouse-cursor: pointer; }
+                    Text { text: "Логи"; color: root.bottom-tab == 1 ? #e0e0e0 : #505050; font-size: 12px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
+                }
+            }
+
+            Rectangle { height: 6px; }
+
+            Rectangle {
+                vertical-stretch: 1; min-height: 160px;
+                background: #141414; border-radius: 9px;
+                border-width: 1px; border-color: #ffffff0a; clip: true;
+
+                Flickable {
+                    x: 0; y: 0; width: parent.width; height: parent.height;
+                    visible: root.bottom-tab == 1;
+                    viewport-height: log-inner.preferred-height + 28px;
+                    viewport-y: min(0px, self.height - self.viewport-height);
+
+                    log-inner := Text {
+                        x: 16px; y: 14px;
+                        width: parent.width - 32px;
+                        text: root.log-text;
+                        font-family: "JetBrains Mono"; font-size: 12px;
+                        color: #6b8faa; wrap: no-wrap;
+                    }
+                }
+            }
+        }
+
+        // ══════════════════════════════════════════════════════════════════
+        // НАСТРОЙКИ
+        // ══════════════════════════════════════════════════════════════════
+        ScrollView {
+            x: 0; y: 0; width: parent.width; height: parent.height;
+            visible: root.active-tab == 1;
+
+            VerticalLayout {
+                padding: 22px; padding-top: 16px; spacing: 0px; alignment: start;
+
+                // ── Общие настройки ────────────────────────────────────────
+
+                SectionDivider { text: "ОБЩИЕ НАСТРОЙКИ"; }
+
+                SettingsRow { label: "Steam ID (17 цифр):";
+                    HorizontalLayout {
+                        spacing: 8px;
+                        LineEdit { text <=> root.cfg-steam-id; width: 220px; height: 34px; font-family: "JetBrains Mono"; }
+                        Rectangle {
+                            width: 268px; height: 34px; border-radius: 8px;
+                            background: steamta.has-hover ? #2a2a3a : #1e1e2a;
+                            border-width: 1px; border-color: steamta.has-hover ? #4a6bd480 : #4a6bd430;
+                            steamta := TouchArea { clicked => { root.open-steam-account(); } mouse-cursor: pointer; }
+                            Text {
+                                text: "Открыть детали аккаунта через Steam-клиент";
+                                color: steamta.has-hover ? #8899cc : #4a6bd4;
+                                font-size: 11px; font-weight: 600;
+                                horizontal-alignment: center; vertical-alignment: center;
+                                wrap: word-wrap;
+                                x: 8px; width: parent.width - 16px; height: parent.height;
+                            }
+                        }
+                    }
+                }
+                Rectangle { height: 14px; }
+
+                SettingsRow { label: "Действие после Сида:";
+                    ComboBox {
+                        width: 220px;
+                        model: ["Ничего", "Закрыть игру и Выйти", "Завершение Работы", "Спящий Режим"];
+                        current-value <=> root.cfg-after-action;
+                    }
+                }
+                Rectangle { height: 14px; }
+
+                SettingsRow { label: "Остановиться после:";
+                    ComboBox {
+                        width: 220px;
+                        model: ["Не останавливаться", "PSTN#1", "PSTN#2", "PSTN#3", "PSTN#4"];
+                        current-index <=> root.cfg-stop-after;
+                    }
+                }
+
+                // ── Настройки приложения ────────────────────────────────────
+
+                SectionDivider { text: "НАСТРОЙКИ ПРИЛОЖЕНИЯ"; }
+
+                ModeToggleRow {
+                    label: "Автозагрузка";
+                    hint: "Запускать приложение вместе с Windows";
+                    checked <=> root.cfg-start-on-startup;
+                }
+
+                ModeToggleRow {
+                    label: "Авто-старт Seed";
+                    hint: "Автоматически начинать сидинг при запуске приложения";
+                    checked <=> root.cfg-auto-start;
+                }
+
+                // Never start seeding after
+                HorizontalLayout {
+                    height: 42px; spacing: 16px; padding-bottom: 14px;
+                    Text { text: "Не начинать после:"; color: #929292; font-size: 13.5px; vertical-alignment: center; width: 200px; }
+                    HorizontalLayout {
+                        spacing: 12px;
+                        if root.cfg-time-limit-enabled : TimeSelector {
+                            hour <=> root.cfg-time-limit;
+                            minute <=> root.cfg-time-limit-minute;
+                        }
+                        if !root.cfg-time-limit-enabled : VerticalLayout {
+                            alignment: center;
+                            Text { text: "Без ограничений"; color: #555555; font-size: 13px; }
+                        }
+                        VerticalLayout { alignment: center; ToggleSwitch { checked <=> root.cfg-time-limit-enabled; } }
+                    }
+                }
+
+                // ── Настройки игры ──────────────────────────────────────────
+
+                SectionDivider { text: "НАСТРОЙКИ ИГРЫ"; }
+
+                ModeToggleRow {
+                    label: "Eco режим";
+                    hint: "Запускает Squad через Steam в окне 1×1 с лимитом 6 FPS";
+                    checked <=> root.cfg-eco-mode;
+                }
+
+                if root.cfg-eco-mode : VerticalLayout {
+                    spacing: 0px; padding-bottom: 8px;
+                    SettingsRow { label: "FPS в игре после сида:";
+                        HorizontalLayout {
+                            spacing: 8px;
+                            LineEdit {
+                                text <=> root.cfg-preferred-fps;
+                                width: 100px; height: 34px;
+                                font-family: "JetBrains Mono";
+                                placeholder-text: "По умолчанию";
+                            }
+                            VerticalLayout {
+                                alignment: center;
+                                Text { text: "FrameRateLimit — пусто = Squad сбрасывает сам"; color: #555555; font-size: 11px; }
+                            }
+                        }
+                    }
+                    SettingsRow { label: "FPS в главном меню:";
+                        HorizontalLayout {
+                            spacing: 8px;
+                            LineEdit {
+                                text <=> root.cfg-preferred-menu-fps;
+                                width: 100px; height: 34px;
+                                font-family: "JetBrains Mono";
+                                placeholder-text: "По умолчанию";
+                            }
+                            VerticalLayout {
+                                alignment: center;
+                                Text { text: "MenuFrameRateLimit — пусто = Squad сбрасывает сам"; color: #555555; font-size: 11px; }
+                            }
+                        }
+                    }
+                    SettingsRow { label: "Путь к лаунчеру (опционально):";
+                        HorizontalLayout {
+                            horizontal-stretch: 1; spacing: 8px;
+                            LineEdit {
+                                text <=> root.cfg-launcher-path;
+                                horizontal-stretch: 1;
+                                height: 34px;
+                                font-family: "JetBrains Mono"; font-size: 12px;
+                                placeholder-text: "Авто-определение через Steam";
+                            }
+                            Rectangle {
+                                width: 70px; height: 34px; border-radius: 8px;
+                                background: brwta.has-hover ? #333333 : #272727;
+                                border-width: 1px; border-color: #ffffff10;
+                                brwta := TouchArea { clicked => { root.browse-launcher(); } mouse-cursor: pointer; }
+                                Text { text: "Обзор"; color: #929292; font-size: 13px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
+                            }
+                        }
+                    }
+                }
+
+                ModeToggleRow { label: "Отключить звук"; hint: "Запускает Squad без звука"; checked <=> root.cfg-disable-sound; }
+
+                ModeToggleRow {
+                    label: "Удалить стартовое видео";
+                    hint: "Удаляет welcome_to_squad.mp4 перед запуском. Путь определяется автоматически";
+                    checked <=> root.cfg-delete-startup-video;
+                }
+                ModeToggleRow { label: "Создать сквад"; hint: "Кратко переключает Squad для создания отряда через консоль"; checked <=> root.cfg-auto-create-squad; }
+
+                ModeToggleRow {
+                    label: "Расширенный режим";
+                    hint: "Показывает дополнительные параметры";
+                    checked <=> root.cfg-advanced-mode;
+                }
+
+                if root.cfg-advanced-mode : VerticalLayout {
+                    spacing: 0px;
+
+                    SectionDivider { text: "ПАРАМЕТРЫ"; }
+
+                    SliderRow {
+                        label: "Порог игроков:";
+                        hint: "После выбранного количества игроков программа перейдет на следующий сервер";
+                        unit: ""; value <=> root.cfg-desired-players; minimum: 30; maximum: 85; step: 5;
+                    }
+                    SliderRow {
+                        label: "Интервал проверки:";
+                        hint: "Как часто проходит проверка количества игроков и подключения";
+                        unit: "с"; value <=> root.cfg-checkup-interval; minimum: 30; maximum: 180; step: 30;
+                    }
+                    SliderRow {
+                        label: "Задержка запуска:";
+                        hint: "Длительность ожидания запуска игры перед подключением к серверу";
+                        unit: "м"; value <=> root.cfg-game-launch-delay; minimum: 1; maximum: 10; step: 1;
+                    }
+                    SliderRow {
+                        label: "Ожидание автозапуска:";
+                        hint: "Длительность ожидания загрузки Windows после старта при Авто-Старте";
+                        unit: "м"; value <=> root.cfg-startup-wait; minimum: 0; maximum: 10; step: 1;
+                    }
+
+                    // Завершить сидинг в
+                    HorizontalLayout {
+                        height: 42px; spacing: 16px; padding-bottom: 14px;
+                        Text { text: "Завершить сидинг в:"; color: #929292; font-size: 13.5px; vertical-alignment: center; width: 200px; }
+                        HorizontalLayout {
+                            spacing: 12px;
+                            if root.cfg-shutdown-enabled : TimeSelector {
+                                hour <=> root.cfg-shutdown-hour;
+                                minute <=> root.cfg-shutdown-minute;
+                            }
+                            if !root.cfg-shutdown-enabled : VerticalLayout {
+                                alignment: center;
+                                Text { text: "Выключено"; color: #555555; font-size: 13px; }
+                            }
+                            VerticalLayout { alignment: center; ToggleSwitch { checked <=> root.cfg-shutdown-enabled; } }
+                        }
+                    }
+
+                    SectionDivider { text: "ЭКСПЕРИМЕНТАЛЬНО"; }
+
+                    ModeToggleRow {
+                        label: "Без рендера (ЭКСПЕРИМ.)";
+                        hint: "Очень часто вызывает вылеты! Запускает через -nullrhi без GPU вместо окна 1×1";
+                        checked <=> root.cfg-render-toggle;
+                    }
+                }
+
+                // ── Save / Reset ───────────────────────────────────────────
+
+                Rectangle { height: 14px; }
+
+                HorizontalLayout {
+                    height: 44px; spacing: 10px; alignment: center;
+
+                    Rectangle {
+                        width: 220px; border-radius: 9px;
+                        background: savta.has-hover ? #46c07a : #3ca96e;
+                        savta := TouchArea {
+                            clicked => {
+                                root.save-settings();
+                                root.popup-alpha = 1.0;
+                                save-toast-timer.running = true;
+                            }
+                            mouse-cursor: pointer;
+                        }
+                        Text { text: "Сохранить Настройки"; color: #101c12; font-size: 14px; font-weight: 700; horizontal-alignment: center; vertical-alignment: center; }
+                    }
+
+                    Rectangle {
+                        width: 130px; border-radius: 9px;
+                        background: rstta.has-hover ? #333333 : #272727;
+                        border-width: 1px; border-color: #ffffff10;
+                        rstta := TouchArea { clicked => { root.reset-settings(); } mouse-cursor: pointer; }
+                        Text { text: "Сбросить"; color: #6b6b6b; font-size: 13px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
+                    }
+                }
+
+                Rectangle { height: 22px; }
+            }
+        }
+
+        } // end content FocusScope
+        } // end tab wrapper
+    } // end VerticalLayout
+
+    // ── Settings-saved toast (highest z, floats over all content) ─────────────
+    Rectangle {
+        x: (parent.width - 290px) / 2;
+        y: parent.height - 68px;
+        width: 290px; height: 44px;
+        border-radius: 10px;
+        background: #1a3520;
+        border-width: 1px; border-color: #3ca96e50;
+        drop-shadow-blur: 12px; drop-shadow-color: #00000060;
+        opacity: root.popup-alpha;
+
+        HorizontalLayout {
+            spacing: 10px; alignment: center;
+            VerticalLayout {
+                alignment: center;
+                Rectangle {
+                    width: 8px; height: 8px; border-radius: 4px;
+                    background: #4ac87a;
+                    drop-shadow-blur: 6px; drop-shadow-color: #4ac87a80;
+                }
+            }
+            Text {
+                text: "Настройки сохранены";
+                color: #4ac87a; font-size: 13px; font-weight: 600;
+                vertical-alignment: center;
+            }
+        }
+    }
+
+    // ── Settings-restored toast ────────────────────────────────────────────────
+    Rectangle {
+        x: (parent.width - 300px) / 2;
+        y: parent.height - 120px;
+        width: 300px; height: 44px;
+        border-radius: 10px;
+        background: #1a2535;
+        border-width: 1px; border-color: #4a6bd450;
+        drop-shadow-blur: 12px; drop-shadow-color: #00000060;
+        opacity: root.restore-toast-alpha;
+
+        HorizontalLayout {
+            spacing: 10px; alignment: center;
+            VerticalLayout {
+                alignment: center;
+                Rectangle {
+                    width: 8px; height: 8px; border-radius: 4px;
+                    background: #4a6bd4;
+                    drop-shadow-blur: 6px; drop-shadow-color: #4a6bd480;
+                }
+            }
+            Text {
+                text: "Настройки восстановлены";
+                color: #4a6bd4; font-size: 13px; font-weight: 600;
+                vertical-alignment: center;
+            }
+        }
+    }
+
+    // ── Stop & Exit confirmation dialog ────────────────────────────────────────
+    if root.show-confirm-exit : Rectangle {
+        x: 0; y: 0; width: parent.width; height: parent.height;
+        background: #00000099;
+
+        // Absorbs all clicks that fall outside the dialog card
+        TouchArea { x: 0; y: 0; width: parent.width; height: parent.height; }
+
+        // Dialog card (higher z than backdrop absorber)
+        Rectangle {
+            x: (parent.width - 430px) / 2;
+            y: (parent.height - 190px) / 2;
+            width: 430px; height: 190px;
+            border-radius: 14px;
+            background: #252525;
+            border-width: 1px; border-color: #ffffff18;
+            drop-shadow-blur: 48px; drop-shadow-color: #000000cc;
+
+            // Absorbs clicks on card body so they don't reach the backdrop TouchArea
+            TouchArea { x: 0; y: 0; width: parent.width; height: parent.height; }
+
+            VerticalLayout {
+                padding: 26px; spacing: 0px;
+
+                Text {
+                    text: "Остановить и выйти?";
+                    color: #e5e5e5; font-size: 15px; font-weight: 700;
+                }
+                Rectangle { height: 8px; }
+                Text {
+                    text: "Сидинг активен. Он будет остановлен, Squad закроется.";
+                    color: #6b6b6b; font-size: 13px; wrap: word-wrap;
+                }
+                Rectangle { height: 22px; }
+
+                HorizontalLayout {
+                    spacing: 10px; height: 42px;
+
+                    Rectangle {
+                        horizontal-stretch: 1; border-radius: 9px;
+                        background: cnfta.has-hover ? #b54040 : #a13a3a;
+                        cnfta := TouchArea {
+                            clicked => {
+                                root.show-confirm-exit = false;
+                                root.stop-and-exit();
+                            }
+                            mouse-cursor: pointer;
+                        }
+                        Text {
+                            text: "Остановить и выйти";
+                            color: #f5e5e0; font-size: 13.5px; font-weight: 700;
+                            horizontal-alignment: center; vertical-alignment: center;
+                        }
+                    }
+
+                    Rectangle {
+                        width: 115px; border-radius: 9px;
+                        background: cncta.has-hover ? #333333 : #2c2c2c;
+                        border-width: 1px; border-color: #ffffff14;
+                        cncta := TouchArea {
+                            clicked => { root.show-confirm-exit = false; }
+                            mouse-cursor: pointer;
+                        }
+                        Text {
+                            text: "Отмена";
+                            color: #929292; font-size: 13.5px; font-weight: 600;
+                            horizontal-alignment: center; vertical-alignment: center;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    } // end root Rectangle
+}
