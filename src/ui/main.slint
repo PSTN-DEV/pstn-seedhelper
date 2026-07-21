@@ -291,7 +291,7 @@ component ServerRow inherits Rectangle {
         spacing: 10px;
 
         Text {
-            width: 264px; text: status.name;
+            width: 259px; text: status.name;
             font-family: "JetBrains Mono"; font-size: 13px; font-weight: 700;
             color: #c9c9c9; vertical-alignment: center; overflow: elide;
         }
@@ -604,7 +604,7 @@ export component AppWindow inherits Window {
                 drag-area := TouchArea {
                     horizontal-stretch: 1;
                     pointer-event(e) => {
-                        if (e.kind == PointerEventKind.down) { root.window-pressed(); }
+                        if (e.kind == PointerEventKind.down) { root.window-pressed(); content-focus.focus(); }
                         else if (e.kind == PointerEventKind.up) { root.window-drag-ended(); }
                     }
                     moved => {
@@ -1041,6 +1041,13 @@ export component AppWindow inherits Window {
             visible: root.active-tab == 1;
             viewport-height: settings-layout.preferred-height + 44px;
 
+            TouchArea {
+                x: 0; y: 0;
+                width: parent.width;
+                height: max(parent.height, settings-layout.preferred-height + 44px);
+                clicked => { content-focus.focus(); }
+            }
+
             settings-layout := VerticalLayout {
                 width: parent.width;
                 padding: 22px; padding-top: 16px; spacing: 0px; alignment: start;
@@ -1134,7 +1141,7 @@ export component AppWindow inherits Window {
 
                 ModeToggleRow {
                     label: "Eco-режим";
-                    hint: "Запускает Squad через Steam в окне 1×1 с лимитом 6 FPS";
+                    hint: "Запускает Squad в маленьком окне и ограничем FPS. Нельзя начать просто играть.";
                     checked <=> root.cfg-eco-mode;
                 }
 

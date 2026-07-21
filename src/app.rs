@@ -297,21 +297,7 @@ fn connect_callbacks(window: slint::Weak<AppWindow>, state: Arc<AppState>) {
             }
         });
 
-        // After drag ends, recommit the logical window size so Slint recalculates the
-        // correct physical size at the current DPI. Fixes elements appearing scaled wrong
-        // after moving the window from a high-DPI monitor to a low-DPI one.
-        let win_drag_end = window.clone();
-        w.on_window_drag_ended(move || {
-            if let Some(app) = win_drag_end.upgrade() {
-                let sf = app.window().scale_factor();
-                let phys_h = app.window().size().height;
-                let logical_h = (phys_h as f32 / sf).clamp(780.0, 920.0);
-                app.window().set_size(slint::WindowSize::Logical(slint::LogicalSize {
-                    width: 960.0,
-                    height: logical_h,
-                }));
-            }
-        });
+        w.on_window_drag_ended(|| {});
 
         w.on_window_minimize(|| crate::platform::minimize_window());
     }

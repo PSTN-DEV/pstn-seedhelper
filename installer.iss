@@ -40,7 +40,12 @@ ArchitecturesAllowed=x64os
 #endif
 UninstallDisplayIcon={app}\{#AppExe}
 UninstallDisplayName={#AppName}
-MinVersion=10.0
+PrivilegesRequired=admin
+MinVersion=10.0.17763
+VersionInfoVersion={#AppVersion}
+VersionInfoDescription={#AppName} Setup
+VersionInfoCompany={#AppPublisher}
+AppMutex=PSTNSeedHelperSetupMutex
 ; App exits before the installer runs (Rust calls process::exit first),
 ; so skip the "please close running apps" dialog entirely.
 CloseApplications=no
@@ -56,7 +61,6 @@ Source: "target\{#TargetTriple}\release\{#AppBinary}"; DestDir: "{app}"; DestNam
 
 [Icons]
 Name: "{group}\{#AppName}";    Filename: "{app}\{#AppExe}"
-Name: "{group}\Uninstall";     Filename: "{uninstallexe}"
 Name: "{commondesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: desktopicon
 
 [Run]
@@ -72,8 +76,12 @@ var
 begin
   if CurUninstallStep = usPostUninstall then begin
     ConfigDir := ExpandConstant('{userappdata}\.SeedHelper');
-    if DirExists(ConfigDir) then
-      if MsgBox('Delete configuration and logs?' + #13#10 + ConfigDir, mbConfirmation, MB_YESNO) = IDYES then
-        DelTree(ConfigDir, True, True, True);
+    if DirExists(ConfigDir) then begin
+      if WizardSilent then
+        DelTree(ConfigDir, True, True, True)
+      else
+        if MsgBox('Delete configuration and logs?' + #13#10 + ConfigDir, mbConfirmation, MB_YESNO) = IDYES then
+          DelTree(ConfigDir, True, True, True);
+    end;
   end;
 end;

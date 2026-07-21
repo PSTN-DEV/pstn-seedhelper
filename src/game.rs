@@ -2,6 +2,8 @@ use anyhow::{bail, Context, Result};
 use std::path::PathBuf;
 use tokio::time::{sleep, Duration};
 use tokio_util::sync::CancellationToken;
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 
 use crate::app::LogSender;
 use crate::config::{self, Config};
@@ -110,10 +112,12 @@ pub fn find_squad_launcher() -> Option<PathBuf> {
 }
 
 fn detect_squad_via_steam() -> Option<PathBuf> {
-    let out = std::process::Command::new("reg")
-        .args(["query", r"HKCU\Software\Valve\Steam", "/v", "SteamPath"])
-        .output()
-        .ok()?;
+    let out = {
+        let mut cmd = std::process::Command::new("reg");
+        cmd.args(["query", r"HKCU\Software\Valve\Steam", "/v", "SteamPath"]);
+        #[cfg(windows)] cmd.creation_flags(0x08000000);
+        cmd.output().ok()?
+    };
     let stdout = String::from_utf8_lossy(&out.stdout);
     let steam_path = stdout
         .lines()
@@ -268,9 +272,9 @@ pub async fn launch_game_steam(
 // ── Steam URL ─────────────────────────────────────────────────────────────────
 
 pub fn open_steam_url(url: &str) -> Result<()> {
-    std::process::Command::new("cmd")
-        .args(["/c", "start", "", url])
-        .spawn()
-        .context("Ошибка открытия steam URL")?;
+    let mut cmd = std::process::Command::new("cmd");
+    cmd.args(["/c", "start", "", url]);
+    #[cfg(windows)] cmd.creation_flags(0x08000000);
+    cmd.spawn().context("Ошибка открытия steam URL")?;
     Ok(())
 }
