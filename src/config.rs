@@ -26,10 +26,12 @@ pub enum Theme {
 
 // ── Config ───────────────────────────────────────────────────────────────────
 
+const CONFIG_VERSION: u32 = 1;
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(default)]
 pub struct Config {
-    pub launcher_path: String,
+    pub config_version: u32,
     pub steam_id: String,
 
     // None  = fetch order from API on each seed run
@@ -56,7 +58,6 @@ pub struct Config {
     pub disable_sound: bool,
     pub delete_startup_video: bool,
     pub eco_mode: bool,
-    pub advanced_mode: bool,
     pub theme: Theme,
 
     // None = disabled, Some("HH:MM") = scheduled shutdown
@@ -68,7 +69,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            launcher_path: String::new(),
+            config_version: CONFIG_VERSION,
             steam_id: String::new(),
             seed_order_override: None,
             desired_players: 65,
@@ -89,7 +90,6 @@ impl Default for Config {
             disable_sound: true,
             delete_startup_video: false,
             eco_mode: false,
-            advanced_mode: false,
             theme: Theme::Dark,
             scheduled_shutdown: None,
         }
@@ -108,10 +108,25 @@ where
 // ── Paths ────────────────────────────────────────────────────────────────────
 
 pub fn config_dir() -> PathBuf {
-    // Keep the same location as Python: %LOCALAPPDATA%\Temp\sqseeder
-    std::env::var("LOCALAPPDATA")
-        .map(|p| PathBuf::from(p).join("Temp").join("sqseeder"))
-        .unwrap_or_else(|_| PathBuf::from("sqseeder"))
+    #[cfg(debug_assertions)]
+    {
+        // ponytail: use cwd in debug so cargo run picks up local config.json
+        return std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        std::env::var("APPDATA")
+            .map(|p| PathBuf::from(p).join(".SeedHelper"))
+            .unwrap_or_else(|_| PathBuf::from(".SeedHelper"))
+    }
+}
+
+#[cfg(not(debug_assertions))]
+fn legacy_config_path() -> Option<PathBuf> {
+    let p = std::env::var("LOCALAPPDATA")
+        .map(|p| PathBuf::from(p).join("Temp").join("sqseeder").join("config.json"))
+        .ok()?;
+    p.exists().then_some(p)
 }
 
 pub fn config_path() -> PathBuf {
@@ -173,13 +188,21 @@ pub fn load() -> Config {
     ensure_config_dir();
     let path = config_path();
 
+    // First run after path change: pull config from old location
+    #[cfg(not(debug_assertions))]
+    if !path.exists() {
+        if let Some(legacy) = legacy_config_path() {
+            let _ = std::fs::copy(&legacy, &path);
+        }
+    }
+
     if !path.exists() {
         let cfg = Config::default();
         save(&cfg);
         return cfg;
     }
 
-    match std::fs::read_to_string(&path) {
+    let mut cfg = match std::fs::read_to_string(&path) {
         Ok(s) => serde_json::from_str(&s).unwrap_or_else(|e| {
             eprintln!("Config parse error: {e}, using defaults");
             Config::default()
@@ -188,7 +211,14 @@ pub fn load() -> Config {
             eprintln!("Config read error: {e}, using defaults");
             Config::default()
         }
+    };
+
+    if cfg.config_version < CONFIG_VERSION {
+        cfg.config_version = CONFIG_VERSION;
+        save(&cfg);
     }
+
+    cfg
 }
 
 pub fn save(cfg: &Config) {

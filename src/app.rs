@@ -16,6 +16,7 @@ pub struct AppState {
     pub config: Mutex<Config>,
     pub api: Arc<HubApi>,
     pub seed_token: Mutex<Option<CancellationToken>>,
+    pub join_token: Mutex<Option<CancellationToken>>,
     pub window: slint::Weak<AppWindow>,
     pub log: LogSender,
 }
@@ -44,6 +45,7 @@ pub fn setup(window: slint::Weak<AppWindow>) {
         config: Mutex::new(cfg),
         api: api.clone(),
         seed_token: Mutex::new(None),
+        join_token: Mutex::new(None),
         window: window.clone(),
         log: log_tx,
     });
@@ -52,6 +54,8 @@ pub fn setup(window: slint::Weak<AppWindow>) {
 
     tokio::spawn(log_consumer(log_rx, window.clone()));
     tokio::spawn(status_poll_loop(state.clone()));
+    tokio::spawn(process_watch_loop(state.clone()));
+    tokio::spawn(api_health_loop(state.clone()));
     tokio::spawn(seed_order_poll(state.clone()));
     tokio::spawn(shutdown_scheduler(state.clone()));
     tokio::spawn(updater::check(state.clone()));
@@ -86,10 +90,11 @@ fn connect_callbacks(window: slint::Weak<AppWindow>, state: Arc<AppState>) {
         w.on_stop_seed(move || stop_seeding(s.clone()));
     }
     {
-        // Stop seed + exit. Does NOT perform after-seed action.
+        // Stop seed + exit. Saves settings first.
         let s = state.clone();
         w.on_stop_and_exit(move || {
             stop_seeding(s.clone());
+            save_settings(s.clone());
             std::process::exit(0);
         });
     }
@@ -106,25 +111,6 @@ fn connect_callbacks(window: slint::Weak<AppWindow>, state: Arc<AppState>) {
         });
     }
     {
-        let win = window.clone();
-        w.on_browse_launcher(move || {
-            let win = win.clone();
-            tokio::spawn(async move {
-                let file = rfd::AsyncFileDialog::new()
-                    .set_title("Выберите squad_launcher.exe (опционально — для удаления видео)")
-                    .add_filter("Executable", &["exe"])
-                    .pick_file()
-                    .await;
-                if let Some(f) = file {
-                    let path = f.path().to_string_lossy().to_string();
-                    let _ = win.upgrade_in_event_loop(move |w| {
-                        w.set_cfg_launcher_path(path.into());
-                    });
-                }
-            });
-        });
-    }
-    {
         let s = state.clone();
         w.on_save_settings(move || save_settings(s.clone()));
     }
@@ -134,16 +120,20 @@ fn connect_callbacks(window: slint::Weak<AppWindow>, state: Arc<AppState>) {
     }
     {
         let s = state.clone();
+        w.on_reload_settings(move || reload_settings(s.clone()));
+    }
+    {
+        let s = state.clone();
         w.on_test_join(move |server_num| {
             let s = s.clone();
             tokio::spawn(async move {
                 let srv_num = server_num as u8;
                 match s.api.join_server(srv_num).await {
                     Ok(url) => {
-                        s.log(format!("[test] Открываем {url}"));
+                        s.log(format!("Открываем {url}"));
                         let _ = crate::game::open_steam_url(&url);
                     }
-                    Err(e) => s.log(format!("[test] Ошибка: {e}")),
+                    Err(e) => s.log(format!("Ошибка: {e}")),
                 }
             });
         });
@@ -160,6 +150,89 @@ fn connect_callbacks(window: slint::Weak<AppWindow>, state: Arc<AppState>) {
             let _ = crate::game::open_steam_url(
                 "steam://openurl/https://store.steampowered.com/account/",
             );
+        });
+    }
+    {
+        w.on_open_website(|| {
+            let _ = std::process::Command::new("cmd")
+                .args(["/c", "start", "", "https://pstnsquad.ru/"])
+                .spawn();
+        });
+    }
+    {
+        w.on_open_steam_click(|| {
+            let _ = crate::game::open_steam_url("steam://open/main");
+        });
+    }
+    {
+        let s = state.clone();
+        w.on_launch_squad_and_join(move |server_num| {
+            let s = s.clone();
+            tokio::spawn(async move {
+                let token = CancellationToken::new();
+                *s.join_token.lock().unwrap() = Some(token.clone());
+                let _ = s.window.upgrade_in_event_loop(|w| w.set_joining_active(true));
+
+                s.log("Запуск Squad...");
+                let _ = crate::game::open_steam_url("steam://run/393380//");
+
+                // Poll until Squad process appears (up to 5 min)
+                let mut squad_started = false;
+                for _ in 0..60u32 {
+                    tokio::select! {
+                        _ = tokio::time::sleep(tokio::time::Duration::from_secs(5)) => {}
+                        _ = token.cancelled() => { break; }
+                    }
+                    if token.is_cancelled() { break; }
+                    if crate::process::is_squad_client_running() {
+                        squad_started = true;
+                        break;
+                    }
+                }
+
+                if !squad_started || token.is_cancelled() {
+                    if !token.is_cancelled() {
+                        s.log("Squad не запустился — подключение отменено");
+                    }
+                    *s.join_token.lock().unwrap() = None;
+                    let _ = s.window.upgrade_in_event_loop(|w| w.set_joining_active(false));
+                    return;
+                }
+
+                s.log("Squad запущен, ждём загрузки главного меню...");
+                let delay_secs = {
+                    let cfg = s.config.lock().unwrap();
+                    (cfg.game_launch_delay as u64 * 60).max(60)
+                };
+                tokio::select! {
+                    _ = tokio::time::sleep(tokio::time::Duration::from_secs(delay_secs)) => {}
+                    _ = token.cancelled() => {}
+                }
+
+                if !token.is_cancelled() {
+                    match s.api.join_server(server_num as u8).await {
+                        Ok(url) => {
+                            s.log(format!("Открываем {url}"));
+                            let _ = crate::game::open_steam_url(&url);
+                        }
+                        Err(e) => s.log(format!("Ошибка подключения: {e}")),
+                    }
+                }
+
+                *s.join_token.lock().unwrap() = None;
+                let _ = s.window.upgrade_in_event_loop(|w| w.set_joining_active(false));
+            });
+        });
+    }
+    {
+        let s = state.clone();
+        w.on_cancel_squad_join(move || {
+            if let Some(token) = s.join_token.lock().unwrap().take() {
+                token.cancel();
+            }
+            crate::process::kill_squad();
+            s.log("Подключение отменено");
+            let _ = s.window.upgrade_in_event_loop(|w| w.set_joining_active(false));
         });
     }
     {
@@ -207,7 +280,6 @@ fn connect_callbacks(window: slint::Weak<AppWindow>, state: Arc<AppState>) {
         });
 
         w.on_window_minimize(|| crate::platform::minimize_window());
-        w.on_window_maximize(|| crate::platform::toggle_maximize());
     }
 }
 
@@ -216,15 +288,23 @@ fn connect_callbacks(window: slint::Weak<AppWindow>, state: Arc<AppState>) {
 fn start_seeding(state: Arc<AppState>) {
     let mut guard = state.seed_token.lock().unwrap();
     if guard.is_some() {
-        state.log("[warn] Seed уже запущен");
+        state.log("Seed уже запущен");
+        return;
+    }
+
+    let cfg = state.config.lock().unwrap().clone();
+    if let Err(e) = crate::game::validate_config(&cfg) {
+        let msg = e.to_string();
+        let _ = state.window.upgrade_in_event_loop(move |w| {
+            w.set_validation_error_msg(msg.into());
+            w.set_show_validation_error(true);
+        });
         return;
     }
 
     let token = CancellationToken::new();
     *guard = Some(token.clone());
     drop(guard);
-
-    let cfg = state.config.lock().unwrap().clone();
     let api = state.api.clone();
     let log = state.log.clone();
     let win = state.window.clone();
@@ -265,7 +345,7 @@ fn stop_seeding(state: Arc<AppState>) {
             let _ = state.log.send("\x00restore_toast".into());
         }
     }
-    state.log("[info] Seed остановлен");
+    state.log("Seed остановлен");
     let _ = state.window.upgrade_in_event_loop(|w| { w.set_seeding_active(false); w.set_stop_blocked(false); });
 }
 
@@ -274,11 +354,11 @@ fn perform_after_seed_action(cfg: &Config, state: &Arc<AppState>) {
         AfterSeedAction::Nothing => {}
         AfterSeedAction::CloseAndExit => std::process::exit(0),
         AfterSeedAction::Shutdown => {
-            state.log("[info] Выключение компьютера...");
+            state.log("Выключение компьютера...");
             let _ = std::process::Command::new("shutdown").args(["/s", "/t", "60"]).spawn();
         }
         AfterSeedAction::Sleep => {
-            state.log("[info] Спящий режим...");
+            state.log("Спящий режим...");
             let _ = std::process::Command::new("rundll32.exe")
                 .args(["powrprof.dll,SetSuspendState", "0,1,0"])
                 .spawn();
@@ -289,13 +369,14 @@ fn perform_after_seed_action(cfg: &Config, state: &Arc<AppState>) {
 // ── Background tasks ──────────────────────────────────────────────────────────
 
 async fn log_consumer(mut rx: mpsc::UnboundedReceiver<String>, window: slint::Weak<AppWindow>) {
-    while let Some(msg) = rx.recv().await {
-        if msg.starts_with('\x00') {
-            if msg == "\x00restore_toast" {
+    while let Some(raw) = rx.recv().await {
+        if raw.starts_with('\x00') {
+            if raw == "\x00restore_toast" {
                 let _ = window.upgrade_in_event_loop(|w| w.set_restore_toast_visible(true));
             }
             continue;
         }
+        let msg = format!("[{}] {}", chrono::Local::now().format("%H:%M:%S"), raw);
         if let Ok(mut f) = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
@@ -326,7 +407,7 @@ async fn status_poll_loop(state: Arc<AppState>) {
                     if let Some(d) = servers.get(tag) {
                         if d.is_online() {
                             return ServerStatus {
-                                name: crate::api::name_for(num).into(),
+                                name: crate::api::clean_name(crate::api::name_for(num)).into(),
                                 online: true,
                                 players: d.players as i32,
                                 max_players: d.max_players as i32,
@@ -338,7 +419,7 @@ async fn status_poll_loop(state: Arc<AppState>) {
                         }
                     }
                     ServerStatus {
-                        name: crate::api::name_for(num).into(),
+                        name: crate::api::clean_name(crate::api::name_for(num)).into(),
                         online: false,
                         players: 0,
                         max_players: 100,
@@ -354,11 +435,33 @@ async fn status_poll_loop(state: Arc<AppState>) {
                 use slint::VecModel;
                 use std::rc::Rc;
                 w.set_servers(Rc::new(VecModel::from(cards)).into());
+                w.set_refresh_ping(!w.get_refresh_ping());
             });
         }
 
         let interval = state.config.lock().unwrap().checkup_interval;
         tokio::time::sleep(tokio::time::Duration::from_secs(interval)).await;
+    }
+}
+
+/// Checks Squad + Steam process state every 5 seconds — much faster than checkup_interval.
+async fn process_watch_loop(state: Arc<AppState>) {
+    loop {
+        let (squad, steam) = crate::process::check_processes();
+        let _ = state.window.upgrade_in_event_loop(move |w| {
+            w.set_squad_running(squad);
+            w.set_steam_running(steam);
+        });
+        tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+    }
+}
+
+/// Polls /api/v1/health every 30 seconds for the status bar indicator.
+async fn api_health_loop(state: Arc<AppState>) {
+    loop {
+        let ok = state.api.health_check().await;
+        let _ = state.window.upgrade_in_event_loop(move |w| w.set_api_ok(ok));
+        tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
     }
 }
 
@@ -400,7 +503,7 @@ async fn shutdown_scheduler(state: Arc<AppState>) {
         let today = now.date_naive();
         if now.hour() == parts[0] && now.minute() == parts[1] && last_fired != Some(today) {
             last_fired = Some(today);
-            state.log(format!("[info] Запланированное выключение в {time_str}..."));
+            state.log(format!("Запланированное выключение в {time_str}..."));
             let _ = std::process::Command::new("shutdown").args(["/s", "/t", "0", "/hybrid"]).spawn();
         }
     }
@@ -420,7 +523,6 @@ mod updater {
 fn sync_config_to_ui(w: &AppWindow, cfg: &Config) {
     w.set_cfg_preferred_fps(cfg.preferred_fps.map(|n| n.to_string()).unwrap_or_default().into());
     w.set_cfg_preferred_menu_fps(cfg.preferred_menu_fps.map(|n| n.to_string()).unwrap_or_default().into());
-    w.set_cfg_launcher_path(cfg.launcher_path.clone().into());
     w.set_cfg_steam_id(cfg.steam_id.clone().into());
     w.set_cfg_seed_order_override(
         cfg.seed_order_override
@@ -441,7 +543,6 @@ fn sync_config_to_ui(w: &AppWindow, cfg: &Config) {
     w.set_cfg_disable_sound(cfg.disable_sound);
     w.set_cfg_delete_startup_video(cfg.delete_startup_video);
     w.set_cfg_eco_mode(cfg.eco_mode);
-    w.set_cfg_advanced_mode(cfg.advanced_mode);
     w.set_cfg_time_limit_minute(cfg.time_limit_minute as i32);
     w.set_cfg_time_limit_enabled(cfg.time_limit_enabled);
     w.set_cfg_after_action(after_action_str(&cfg.after_seed_action).into());
@@ -457,6 +558,8 @@ fn sync_config_to_ui(w: &AppWindow, cfg: &Config) {
     } else {
         w.set_cfg_shutdown_enabled(false);
     }
+    // Reset after all properties are set so changed-handlers don't leave dirty=true
+    w.set_settings_dirty(false);
 }
 
 fn save_settings(state: Arc<AppState>) {
@@ -487,7 +590,6 @@ fn save_settings(state: Arc<AppState>) {
 
         cfg.preferred_fps        = w.get_cfg_preferred_fps().to_string().trim().parse::<u32>().ok();
         cfg.preferred_menu_fps   = w.get_cfg_preferred_menu_fps().to_string().trim().parse::<u32>().ok();
-        cfg.launcher_path        = w.get_cfg_launcher_path().to_string();
         cfg.steam_id             = w.get_cfg_steam_id().to_string();
         cfg.seed_order_override  = seed_override;
         cfg.desired_players      = w.get_cfg_desired_players() as u32;
@@ -502,7 +604,6 @@ fn save_settings(state: Arc<AppState>) {
         cfg.disable_sound        = w.get_cfg_disable_sound();
         cfg.delete_startup_video = w.get_cfg_delete_startup_video();
         cfg.eco_mode             = w.get_cfg_eco_mode();
-        cfg.advanced_mode        = w.get_cfg_advanced_mode();
         cfg.time_limit_minute    = w.get_cfg_time_limit_minute() as u32;
         cfg.time_limit_enabled   = w.get_cfg_time_limit_enabled();
         cfg.after_seed_action    = parse_after_action(&w.get_cfg_after_action());
@@ -516,14 +617,24 @@ fn save_settings(state: Arc<AppState>) {
         new_startup = cfg.start_on_startup;
         config::save(&cfg);
     }
+    w.set_settings_dirty(false);
 
     if old_startup != new_startup {
         if let Err(e) = crate::startup::set(new_startup) {
-            state.log(format!("[error] Ошибка автозагрузки: {e}"));
+            state.log(format!("Ошибка автозагрузки: {e}"));
         }
     }
 
-    state.log("[info] Настройки сохранены");
+    state.log("Настройки сохранены");
+}
+
+fn reload_settings(state: Arc<AppState>) {
+    let cfg = config::load();
+    *state.config.lock().unwrap() = cfg.clone();
+    let _ = state.window.upgrade_in_event_loop(move |w| {
+        sync_config_to_ui(&w, &cfg);
+    });
+    state.log("Изменения отменены");
 }
 
 fn reset_settings(state: Arc<AppState>) {
@@ -535,7 +646,7 @@ fn reset_settings(state: Arc<AppState>) {
     let _ = state.window.upgrade_in_event_loop(move |w| {
         sync_config_to_ui(&w, &defaults);
     });
-    state.log("[info] Настройки сброшены");
+    state.log("Настройки сброшены");
 }
 
 // ── Theme ─────────────────────────────────────────────────────────────────────

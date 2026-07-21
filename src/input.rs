@@ -5,7 +5,7 @@ use tokio_util::sync::CancellationToken;
 use crate::app::LogSender;
 
 pub async fn create_ingame_squad(token: &CancellationToken, log: &LogSender) {
-    let _ = log.send("[info] Подключение успешно! Ждём 10 сек перед созданием сквада...".into());
+    let _ = log.send("Подключение успешно! Ждём 10 сек перед созданием сквада...".into());
 
     tokio::select! {
         _ = tokio::time::sleep(tokio::time::Duration::from_secs(10)) => {}
@@ -15,14 +15,14 @@ pub async fn create_ingame_squad(token: &CancellationToken, log: &LogSender) {
     #[cfg(windows)]
     {
         if let Err(e) = windows_create_squad() {
-            let _ = log.send(format!("[error] Ошибка создания сквада: {e}"));
+            let _ = log.send(format!("Ошибка создания сквада: {e}"));
         } else {
-            let _ = log.send("[info] Сквад создан".into());
+            let _ = log.send("Сквад создан".into());
         }
     }
     #[cfg(not(windows))]
     {
-        let _ = log.send("[warn] Автосоздание сквада поддерживается только на Windows".into());
+        let _ = log.send("Автосоздание сквада поддерживается только на Windows".into());
     }
 }
 

@@ -8,8 +8,21 @@ const HUB_API: &str = "https://api.hub.pstnsquad.ru/api/v1/public";
 const SEEDING_API: &str = "https://seeding.pstnsquad.ru/api";
 
 pub const SERVER_TAGS: [(u8, &str); 4] = [(1, "A"), (2, "B"), (3, "C"), (4, "D")];
-pub const SERVER_NAMES: [(u8, &str); 4] =
-    [(1, "PSTN#1"), (2, "PSTN#2"), (3, "PSTN#3"), (4, "PSTN#4")];
+pub const SERVER_NAMES: [(u8, &str); 4] = [
+    (1, "PSTN #1 Первый Сервер"),
+    (2, "PSTN #2 Инвага"),
+    (3, "PSTN #3 ВС РФ vs ВСУ 24/7"),
+    (4, "PSTN #4 Все режимы"),
+];
+
+/// Strips " | pstnsquad.ru" (and similar trailing domain segments) from server names.
+pub fn clean_name(name: &str) -> &str {
+    if let Some(i) = name.find("| pstnsquad") {
+        name[..i].trim_end()
+    } else {
+        name
+    }
+}
 
 pub fn tag_for(server_num: u8) -> Option<&'static str> {
     SERVER_TAGS.iter().find(|(n, _)| *n == server_num).map(|(_, t)| *t)
@@ -203,7 +216,7 @@ impl HubApi {
         Ok(resp.to_vec())
     }
 
-    /// Health-check: returns true if the API is reachable.
+    /// Network reachability check used by the seeder before starting.
     pub async fn ping(&self) -> bool {
         self.client
             .get(format!("{HUB_API}/servers"))
@@ -212,5 +225,20 @@ impl HubApi {
             .await
             .map(|r| r.status().is_success())
             .unwrap_or(false)
+    }
+
+    /// Checks /api/v1/health → {status:"ok"} — shown in the status bar.
+    pub async fn health_check(&self) -> bool {
+        #[derive(Deserialize)]
+        struct Resp { status: String }
+        match self.client
+            .get("https://api.hub.pstnsquad.ru/api/v1/health")
+            .timeout(Duration::from_secs(5))
+            .send()
+            .await
+        {
+            Ok(r) => r.json::<Resp>().await.map(|h| h.status == "ok").unwrap_or(false),
+            Err(_) => false,
+        }
     }
 }

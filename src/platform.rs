@@ -2,7 +2,12 @@
 fn find_window() -> Option<windows::Win32::Foundation::HWND> {
     use windows::Win32::UI::WindowsAndMessaging::FindWindowW;
     use windows::core::PCWSTR;
-    let title: Vec<u16> = "Seed Helper v4.0\0".encode_utf16().collect();
+    let title: Vec<u16> = concat!(
+        "Seed Helper v",
+        env!("CARGO_PKG_VERSION_MAJOR"), ".",
+        env!("CARGO_PKG_VERSION_MINOR"),
+        "\0"
+    ).encode_utf16().collect();
     unsafe { FindWindowW(PCWSTR::null(), PCWSTR(title.as_ptr())).ok() }
 }
 
@@ -14,19 +19,6 @@ pub fn minimize_window() {
     }
 }
 
-#[cfg(windows)]
-pub fn toggle_maximize() {
-    use windows::Win32::UI::WindowsAndMessaging::{IsZoomed, ShowWindow, SW_MAXIMIZE, SW_RESTORE};
-    if let Some(hwnd) = find_window() {
-        unsafe {
-            if IsZoomed(hwnd).as_bool() {
-                let _ = ShowWindow(hwnd, SW_RESTORE);
-            } else {
-                let _ = ShowWindow(hwnd, SW_MAXIMIZE);
-            }
-        }
-    }
-}
 
 #[cfg(windows)]
 pub fn cursor_pos() -> Option<(i32, i32)> {
@@ -39,8 +31,6 @@ pub fn cursor_pos() -> Option<(i32, i32)> {
 #[cfg(not(windows))]
 pub fn minimize_window() {}
 
-#[cfg(not(windows))]
-pub fn toggle_maximize() {}
 
 #[cfg(not(windows))]
 pub fn cursor_pos() -> Option<(i32, i32)> { None }

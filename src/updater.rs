@@ -13,32 +13,32 @@ pub async fn check(state: &Arc<AppState>) {
             });
         }
         Ok(_) => {} // already up to date
-        Err(e) => log::warn!("Не удалось проверить обновление: {e}"),
+        Err(e) => { let _ = state.log.send(format!("Не удалось проверить обновление: {e}")); }
     }
 }
 
 /// Download and self-replace. Spawns a helper bat then exits.
 pub async fn apply(state: &Arc<AppState>) {
-    let _ = state.log.send("[info] Скачиваем обновление...".into());
+    let _ = state.log.send("Скачиваем обновление...".into());
 
     let bytes: Vec<u8> = match state.api.download_update().await {
         Ok(b) => b,
         Err(e) => {
-            let _ = state.log.send(format!("[error] Ошибка скачивания: {e}"));
+            let _ = state.log.send(format!("Ошибка скачивания: {e}"));
             return;
         }
     };
 
     let tmp = std::env::temp_dir().join("seed_helper_update.exe");
     if let Err(e) = std::fs::write(&tmp, &bytes) {
-        let _ = state.log.send(format!("[error] Ошибка записи обновления: {e}"));
+        let _ = state.log.send(format!("Ошибка записи обновления: {e}"));
         return;
     }
 
     // Write a bat that waits 2s, replaces the exe, then launches the new version
     let current_exe = match std::env::current_exe() {
         Ok(p) => p,
-        Err(e) => { let _ = state.log.send(format!("[error] {e}")); return; }
+        Err(e) => { let _ = state.log.send(format!("{e}")); return; }
     };
 
     let bat = std::env::temp_dir().join("seed_helper_update.bat");
@@ -48,11 +48,11 @@ pub async fn apply(state: &Arc<AppState>) {
     );
 
     if let Err(e) = std::fs::write(&bat, bat_content) {
-        let _ = state.log.send(format!("[error] Ошибка записи bat: {e}"));
+        let _ = state.log.send(format!("Ошибка записи bat: {e}"));
         return;
     }
 
-    let _ = state.log.send("[info] Перезапускаем для применения обновления...".into());
+    let _ = state.log.send("Перезапускаем для применения обновления...".into());
     let _ = std::process::Command::new("cmd")
         .args(["/c", &bat.to_string_lossy()])
         .spawn();

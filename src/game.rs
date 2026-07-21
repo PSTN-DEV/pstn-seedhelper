@@ -15,7 +15,7 @@ pub fn validate_config(cfg: &Config) -> Result<()> {
         if !config::game_settings_path().exists() {
             bail!("GameUserSettings.ini не найден: {:?}", config::game_settings_path());
         }
-        if find_squad_launcher(&cfg.launcher_path).is_none() {
+        if find_squad_launcher().is_none() {
             bail!("squad_launcher.exe не найден — укажите путь в настройках или установите Squad через Steam");
         }
     }
@@ -97,34 +97,16 @@ pub fn write_fps_keys(fps: Option<u32>, menu_fps: Option<u32>) -> Result<()> {
 
 // ── Squad install dir detection ───────────────────────────────────────────────
 
-/// Find Squad install dir: Steam registry → libraryfolders.vdf → launcher_path fallback.
-pub fn find_squad_dir(launcher_path_fallback: &str) -> Option<PathBuf> {
-    if let Some(dir) = detect_squad_via_steam() {
-        return Some(dir);
-    }
-    if !launcher_path_fallback.is_empty() {
-        if let Some(parent) = std::path::Path::new(launcher_path_fallback).parent() {
-            return Some(parent.to_owned());
-        }
-    }
-    None
+/// Find Squad install dir via Steam registry → libraryfolders.vdf.
+pub fn find_squad_dir() -> Option<PathBuf> {
+    detect_squad_via_steam()
 }
 
-/// Find squad_launcher.exe: auto-detect from Steam, then fall back to configured path.
-pub fn find_squad_launcher(launcher_path_fallback: &str) -> Option<PathBuf> {
-    if let Some(squad_dir) = detect_squad_via_steam() {
-        let exe = squad_dir.join("squad_launcher.exe");
-        if exe.exists() {
-            return Some(exe);
-        }
-    }
-    if !launcher_path_fallback.is_empty() {
-        let p = PathBuf::from(launcher_path_fallback);
-        if p.exists() {
-            return Some(p);
-        }
-    }
-    None
+/// Find squad_launcher.exe via Steam registry → libraryfolders.vdf.
+pub fn find_squad_launcher() -> Option<PathBuf> {
+    let squad_dir = detect_squad_via_steam()?;
+    let exe = squad_dir.join("squad_launcher.exe");
+    exe.exists().then_some(exe)
 }
 
 fn detect_squad_via_steam() -> Option<PathBuf> {
@@ -166,11 +148,11 @@ fn detect_squad_via_steam() -> Option<PathBuf> {
 
 // ── Welcome video ─────────────────────────────────────────────────────────────
 
-pub fn remove_welcome_video(cfg: &Config, log: &LogSender) {
-    let squad_dir = match find_squad_dir(&cfg.launcher_path) {
+pub fn remove_welcome_video(log: &LogSender) {
+    let squad_dir = match find_squad_dir() {
         Some(d) => d,
         None => {
-            let _ = log.send("[warn] Не удалось найти папку Squad для удаления видео".into());
+            let _ = log.send("Не удалось найти папку Squad для удаления видео".into());
             return;
         }
     };
@@ -182,9 +164,9 @@ pub fn remove_welcome_video(cfg: &Config, log: &LogSender) {
 
     if video.exists() {
         if let Err(e) = std::fs::remove_file(&video) {
-            let _ = log.send(format!("[warn] Не удалось удалить видео: {e}"));
+            let _ = log.send(format!("Не удалось удалить видео: {e}"));
         } else {
-            let _ = log.send("[info] Удалено welcome_to_squad.mp4".into());
+            let _ = log.send("Удалено welcome_to_squad.mp4".into());
         }
     }
 }
@@ -212,16 +194,16 @@ pub async fn launch_game_eco(
     if cfg.render_toggle {
         args.extend(["-nullrhi", "-NoAsyncPostLoad", "-noshaderworker",
                      "-norenderthread", "-NoShaderCompile", "-log", "-nosplash"]);
-        let _ = log.send("[info] Squad запущен без рендера (eco, -nullrhi)".into());
+        let _ = log.send("Squad запущен без рендера (eco, -nullrhi)".into());
     } else {
         args.extend(["-windowed", "-ResX=1", "-ResY=1"]);
-        let _ = log.send("[info] Squad запущен в эко режиме (окно 1×1)".into());
+        let _ = log.send("Squad запущен в эко режиме (окно 1×1)".into());
     }
     if cfg.disable_sound {
         args.push("-nosound");
     }
 
-    let launcher = find_squad_launcher(&cfg.launcher_path)
+    let launcher = find_squad_launcher()
         .context("squad_launcher.exe не найден — укажите путь в настройках")?;
 
     write_fps_keys(Some(6), Some(6))?;
@@ -230,7 +212,7 @@ pub async fn launch_game_eco(
         .spawn()
         .context("Ошибка запуска Squad")?;
 
-    let _ = log.send("[info] Ждём 10 секунд — игра читает настройки...".into());
+    let _ = log.send("Ждём 10 секунд — игра читает настройки...".into());
     tokio::select! {
         _ = sleep(Duration::from_secs(10)) => {}
         _ = token.cancelled() => {
@@ -247,7 +229,7 @@ pub async fn launch_game_eco(
         .saturating_mul(60)
         .saturating_sub(10);
     if delay_secs > 0 {
-        let _ = log.send(format!("[info] Ждём загрузки игры (ещё {delay_secs} сек)..."));
+        let _ = log.send(format!("Ждём загрузки игры (ещё {delay_secs} сек)..."));
         tokio::select! {
             _ = sleep(Duration::from_secs(delay_secs)) => {}
             _ = token.cancelled() => {}
@@ -269,11 +251,11 @@ pub async fn launch_game_steam(
     }
 
     open_steam_url(&steam_url(&args))?;
-    let _ = log.send("[info] Squad запущен через Steam".into());
+    let _ = log.send("Squad запущен через Steam".into());
 
     let delay_secs = cfg.game_launch_delay as u64 * 60;
     if delay_secs > 0 {
-        let _ = log.send(format!("[info] Ждём загрузки игры ({delay_secs} сек)..."));
+        let _ = log.send(format!("Ждём загрузки игры ({delay_secs} сек)..."));
         tokio::select! {
             _ = sleep(Duration::from_secs(delay_secs)) => {}
             _ = token.cancelled() => {}

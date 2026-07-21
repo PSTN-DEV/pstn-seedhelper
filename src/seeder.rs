@@ -24,9 +24,17 @@ async fn isleep(secs: u64, token: &CancellationToken) -> Result<(), ()> {
 
 /// Launch Squad (eco or Steam), including backup/modify/restore for eco.
 /// Re-used for restarts inside the server loop.
-async fn do_launch(config: &Config, token: &CancellationToken, log: &LogSender) -> anyhow::Result<()> {
+async fn do_launch(
+    config: &Config,
+    token: &CancellationToken,
+    log: &LogSender,
+) -> anyhow::Result<()> {
+    if crate::process::is_squad_client_running() {
+        let _ = log.send("Squad уже запущен — пропускаем запуск".into());
+        return Ok(());
+    }
     if config.delete_startup_video {
-        crate::game::remove_welcome_video(config, log);
+        crate::game::remove_welcome_video(log);
     }
     if config.eco_mode {
         crate::game::launch_game_eco(config, token, log).await?;
@@ -34,6 +42,25 @@ async fn do_launch(config: &Config, token: &CancellationToken, log: &LogSender) 
         crate::game::launch_game_steam(config, token, log).await?;
     }
     Ok(())
+}
+
+/// Returns true if every online server in `order` already has enough players.
+/// Offline servers are skipped — they can't be seeded anyway.
+async fn all_seeded(order: &[u8], threshold: u32, api: &HubApi, log: &LogSender) -> bool {
+    let servers = match api.get_all_servers().await {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    for &num in order {
+        let tag = crate::api::tag_for(num).unwrap_or("");
+        if let Some(s) = servers.get(tag) {
+            if s.is_online() && s.players < threshold {
+                return false;
+            }
+        }
+    }
+    let _ = log.send("Все активные сервера уже заполнены — запуск игры не требуется".into());
+    true
 }
 
 /// Returns true = completed naturally (after-seed action should fire),
@@ -45,10 +72,7 @@ pub async fn start_seeding(
     log: LogSender,
 ) -> bool {
     macro_rules! log {
-        ($($arg:tt)*) => {{
-            let msg = format!("[{}] {}", chrono::Local::now().format("%Y-%m-%d %H:%M:%S"), format!($($arg)*));
-            let _ = log.send(msg);
-        }};
+        ($($arg:tt)*) => {{ let _ = log.send(format!($($arg)*)); }};
     }
 
     log!("Начинаем Seed серверов!");
@@ -63,14 +87,18 @@ pub async fn start_seeding(
     log!("Проверка доступности сети...");
     let mut ready = false;
     for _ in 0..20 {
-        if token.is_cancelled() { return false; }
+        if token.is_cancelled() {
+            return false;
+        }
         if api.ping().await {
             log!("Сеть доступна!");
             ready = true;
             break;
         }
         log!("Сеть недоступна, повтор через 15 сек...");
-        if isleep(15, &token).await.is_err() { return false; }
+        if isleep(15, &token).await.is_err() {
+            return false;
+        }
     }
     if !ready {
         log!("Сеть недоступна после 5 минут — seed отменён");
@@ -86,7 +114,12 @@ pub async fn start_seeding(
     // 4. Resolve seed order
     let order = resolve_seed_order(&config, &api, &log).await;
 
-    // 5. Launch game
+    // 5. Skip launch if every online server is already seeded
+    if all_seeded(&order, config.desired_players, &api, &log).await {
+        return true;
+    }
+
+    // 6. Launch game
     if let Err(e) = do_launch(&config, &token, &log).await {
         log!("Ошибка запуска игры: {e}");
         if config.eco_mode {
@@ -94,14 +127,20 @@ pub async fn start_seeding(
         }
         return !token.is_cancelled();
     }
-    if token.is_cancelled() { return false; }
+    if token.is_cancelled() {
+        return false;
+    }
 
-    // 6. Server seed loop
+    // 7. Server seed loop
     'servers: for &server_num in &order {
-        if token.is_cancelled() { break; }
+        if token.is_cancelled() {
+            break;
+        }
 
         loop {
-            if token.is_cancelled() { break 'servers; }
+            if token.is_cancelled() {
+                break 'servers;
+            }
 
             match seed_server(server_num, &config, &api, &token, &log).await {
                 SeedResult::Cancelled => break 'servers,
@@ -144,22 +183,20 @@ pub async fn start_seeding(
     }
 }
 
-async fn resolve_seed_order(
-    config: &Config,
-    api: &HubApi,
-    log: &LogSender,
-) -> Vec<u8> {
+async fn resolve_seed_order(config: &Config, api: &HubApi, log: &LogSender) -> Vec<u8> {
     if let Some(ref local) = config.seed_order_override {
-        let _ = log.send(format!("[info] Используем локальный порядок: {local:?}"));
+        let _ = log.send(format!("Используем локальный порядок: {local:?}"));
         return local.clone();
     }
     match api.get_seed_order().await {
         Ok(order) => {
-            let _ = log.send(format!("[info] Порядок сида с сервера: {order:?}"));
+            let _ = log.send(format!("Порядок сида с сервера: {order:?}"));
             order
         }
         Err(e) => {
-            let _ = log.send(format!("[warn] Не удалось получить порядок с сервера: {e}. Используем 1-2-3-4"));
+            let _ = log.send(format!(
+                "Не удалось получить порядок с сервера: {e}. Используем 1-2-3-4"
+            ));
             vec![1, 2, 3, 4]
         }
     }
@@ -173,18 +210,22 @@ async fn seed_server(
     log: &LogSender,
 ) -> SeedResult {
     macro_rules! log {
-        ($($arg:tt)*) => {{
-            let msg = format!("[{}] {}", chrono::Local::now().format("%Y-%m-%d %H:%M:%S"), format!($($arg)*));
-            let _ = log.send(msg);
-        }};
+        ($($arg:tt)*) => {{ let _ = log.send(format!($($arg)*)); }};
     }
 
-    log!("Сид сервера {} ({})", server_num, crate::api::name_for(server_num));
+    log!(
+        "Сид сервера {} ({})",
+        server_num,
+        crate::api::name_for(server_num)
+    );
 
     // Check player count first
     let status = match api.get_server(server_num).await {
         Ok(s) => s,
-        Err(e) => { log!("Не удалось получить статус сервера {server_num}: {e}"); return SeedResult::Failed; }
+        Err(e) => {
+            log!("Не удалось получить статус сервера {server_num}: {e}");
+            return SeedResult::Failed;
+        }
     };
 
     if status.players >= config.desired_players {
@@ -195,9 +236,12 @@ async fn seed_server(
     // Request join URL then open it
     let connect_url = match api.join_server(server_num).await {
         Ok(u) => u,
-        Err(e) => { log!("Не удалось получить URL подключения: {e}"); return SeedResult::Failed; }
+        Err(e) => {
+            log!("Не удалось получить URL подключения: {e}");
+            return SeedResult::Failed;
+        }
     };
-    log!("Подключаемся к {}...", connect_url);
+    log!("Подключаемся к {}...", server_num);
     if let Err(e) = crate::game::open_steam_url(&connect_url) {
         log!("Ошибка открытия steam URL: {e}");
         return SeedResult::Failed;
@@ -205,21 +249,30 @@ async fn seed_server(
 
     // Wait 2 minutes then verify connection
     log!("Ждём 2 минуты перед проверкой подключения...");
-    if isleep(120, token).await.is_err() { return SeedResult::Cancelled; }
+    if isleep(120, token).await.is_err() {
+        return SeedResult::Cancelled;
+    }
 
     // Up to 3 connection attempts
     let mut connected = false;
     for attempt in 1..=3u8 {
-        if token.is_cancelled() { return SeedResult::Cancelled; }
+        if token.is_cancelled() {
+            return SeedResult::Cancelled;
+        }
         match api.check_player(&config.steam_id, server_num).await {
-            Ok(true) => { connected = true; break; }
+            Ok(true) => {
+                connected = true;
+                break;
+            }
             Ok(false) => {
                 log!("Подключение не подтверждено (попытка {attempt}/3)");
                 if attempt < 3 {
                     if let Ok(url) = api.join_server(server_num).await {
                         let _ = crate::game::open_steam_url(&url);
                     }
-                    if isleep(120, token).await.is_err() { return SeedResult::Cancelled; }
+                    if isleep(120, token).await.is_err() {
+                        return SeedResult::Cancelled;
+                    }
                 }
             }
             Err(e) => log!("Ошибка проверки подключения: {e}"),
@@ -239,7 +292,10 @@ async fn seed_server(
     }
 
     // Monitor loop
-    log!("Мониторинг сервера {server_num} до {} игроков...", config.desired_players);
+    log!(
+        "Мониторинг сервера {server_num} до {} игроков...",
+        config.desired_players
+    );
     loop {
         if isleep(config.checkup_interval, token).await.is_err() {
             return SeedResult::Cancelled;
@@ -256,9 +312,16 @@ async fn seed_server(
 
         match api.get_server(server_num).await {
             Ok(s) => {
-                log!("Сервер {server_num}: {}/{}", s.players, config.desired_players);
+                log!(
+                    "Сервер {server_num}: {}/{}",
+                    s.players,
+                    config.desired_players
+                );
                 if s.players >= config.desired_players {
-                    log!("Сервер {server_num} достиг {} игроков!", config.desired_players);
+                    log!(
+                        "Сервер {server_num} достиг {} игроков!",
+                        config.desired_players
+                    );
                     return SeedResult::Success;
                 }
             }
