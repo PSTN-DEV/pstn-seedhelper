@@ -287,7 +287,7 @@ component ServerRow inherits Rectangle {
         (status.online && status.players >= 20) ? #2e9860 : #b04030;
 
     HorizontalLayout {
-        padding-left: 14px; padding-right: 14px; padding-top: 12px; padding-bottom: 12px;
+        padding-left: 14px; padding-right: 28px; padding-top: 12px; padding-bottom: 12px;
         spacing: 10px;
 
         Text {
@@ -445,6 +445,9 @@ export component AppWindow inherits Window {
     in-out property <bool>   show-squad-prompt: false;
     in-out property <int>    pending-join-server: 0;
     in-out property <bool>   joining-active: false;
+    in-out property <bool>   show-after-hours-prompt: false;
+    in-out property <string> app-version: "";
+    in-out property <bool>   cfg-auto-update: false;
 
     // cfg properties (Rust-bound — names must not change)
     in-out property <string> cfg-steam-id: "";
@@ -487,12 +490,14 @@ export component AppWindow inherits Window {
     callback open-steam-account();
     callback window-pressed();
     callback window-drag(float, float);
+    callback window-drag-ended();
     callback window-minimize();
     callback reload-settings();
     callback open-website();
     callback open-steam-click();
     callback launch-squad-and-join(int);
     callback cancel-squad-join();
+    callback force-start-seed();
 
     // ── Internal state ────────────────────────────────────────────────────
 
@@ -529,6 +534,7 @@ export component AppWindow inherits Window {
     changed cfg-shutdown-hour        => { root.settings-dirty = true; }
     changed cfg-shutdown-minute      => { root.settings-dirty = true; }
     changed cfg-shutdown-enabled     => { root.settings-dirty = true; }
+    changed cfg-auto-update          => { root.settings-dirty = true; }
     changed refresh-ping             => { refresh-elapsed = 0; }
     animate popup-alpha { duration: 220ms; easing: ease-out; }
     private property <float> restore-toast-alpha: restore-toast-visible ? 1.0 : 0.0;
@@ -597,7 +603,10 @@ export component AppWindow inherits Window {
 
                 drag-area := TouchArea {
                     horizontal-stretch: 1;
-                    pointer-event(e) => { if (e.kind == PointerEventKind.down) { root.window-pressed(); } }
+                    pointer-event(e) => {
+                        if (e.kind == PointerEventKind.down) { root.window-pressed(); }
+                        else if (e.kind == PointerEventKind.up) { root.window-drag-ended(); }
+                    }
                     moved => {
                         if (self.pressed) {
                             root.window-drag(
@@ -802,8 +811,32 @@ export component AppWindow inherits Window {
 
                 Rectangle {
                     width: 110px; border-radius: 9px;
-                    background: #272727; border-width: 1px; border-color: #ffffff0f;
-                    Text { text: "ЧаВо"; color: #555555; font-size: 13px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
+                    background: root.update-notice != ""
+                        ? (updta.has-hover ? #3a2020 : #2e1818)
+                        : (updta.has-hover ? #2e2e2e : #272727);
+                    border-width: 1px;
+                    border-color: root.update-notice != "" ? #ae3c2c60 : #ffffff0f;
+                    clip: false;
+                    updta := TouchArea {
+                        clicked => { if (root.update-notice != "") { root.apply-update(); } }
+                        mouse-cursor: root.update-notice != "" ? pointer : default;
+                    }
+                    Text {
+                        text: root.update-notice != "" ? "ОБНОВИТЬ" : "v\{root.app-version}";
+                        color: root.update-notice != ""
+                            ? (updta.has-hover ? #f5b8a8 : #d4816e)
+                            : #555555;
+                        font-size: 12px; font-weight: 600;
+                        horizontal-alignment: center; vertical-alignment: center;
+                    }
+                    if root.update-notice != "" : Rectangle {
+                        x: parent.width - 8px;
+                        y: -4px;
+                        width: 12px; height: 12px;
+                        border-radius: 6px;
+                        background: #c13520;
+                        border-width: 2px; border-color: #0d0d0e;
+                    }
                 }
             }
 
@@ -840,22 +873,59 @@ export component AppWindow inherits Window {
 
             Rectangle { height: 14px; }
 
-            if root.remote-seed-order != "" : Text {
-                text: "Порядок Сида: \{root.remote-seed-order}"; color: #6b6b6b; font-size: 12px; height: 16px;
-            }
             HorizontalLayout {
                 height: 24px; spacing: 8px;
                 Text { text: "СТАТУС СЕРВЕРОВ"; color: #6b6b6b; font-size: 11.5px; font-weight: 600; letter-spacing: 0.6px; vertical-alignment: center; }
                 Rectangle { horizontal-stretch: 1; }
                 VerticalLayout {
                     alignment: center;
+                    // ponytail: 4-quadrant pie countdown; CW depletion from 12 o'clock, Q1 depletes first
                     Rectangle {
-                        // ponytail: shrinking dot as refresh countdown; animate gives smooth 1s decay
-                        width: 4px + 6px * root.refresh-fill;
-                        height: self.width;
-                        border-radius: self.width / 2;
-                        background: root.api-ok ? #4ac87a : #555555;
-                        animate width { duration: 900ms; easing: linear; }
+                        width: 12px; height: 12px;
+                        clip: true;
+                        border-radius: 6px;
+                        background: root.api-ok ? #0d2010 : #1a1a1a;
+
+                        // Q4: 9→12 o'clock (last to go, fill > 0)
+                        if root.refresh-fill > 0.0 : Path {
+                            width: 12px; height: 12px;
+                            viewbox-x: 0; viewbox-y: 0; viewbox-width: 12; viewbox-height: 12;
+                            fill: root.api-ok ? #4ac87a : #555555;
+                            MoveTo { x: 6; y: 6; }
+                            LineTo { x: 0; y: 6; }
+                            ArcTo { radius-x: 6; radius-y: 6; x-rotation: 0; large-arc: false; sweep: true; x: 6; y: 0; }
+                            Close {}
+                        }
+                        // Q3: 6→9 o'clock (fill > 0.25)
+                        if root.refresh-fill > 0.25 : Path {
+                            width: 12px; height: 12px;
+                            viewbox-x: 0; viewbox-y: 0; viewbox-width: 12; viewbox-height: 12;
+                            fill: root.api-ok ? #4ac87a : #555555;
+                            MoveTo { x: 6; y: 6; }
+                            LineTo { x: 6; y: 12; }
+                            ArcTo { radius-x: 6; radius-y: 6; x-rotation: 0; large-arc: false; sweep: true; x: 0; y: 6; }
+                            Close {}
+                        }
+                        // Q2: 3→6 o'clock (fill > 0.5)
+                        if root.refresh-fill > 0.5 : Path {
+                            width: 12px; height: 12px;
+                            viewbox-x: 0; viewbox-y: 0; viewbox-width: 12; viewbox-height: 12;
+                            fill: root.api-ok ? #4ac87a : #555555;
+                            MoveTo { x: 6; y: 6; }
+                            LineTo { x: 12; y: 6; }
+                            ArcTo { radius-x: 6; radius-y: 6; x-rotation: 0; large-arc: false; sweep: true; x: 6; y: 12; }
+                            Close {}
+                        }
+                        // Q1: 12→3 o'clock (first to go, fill > 0.75)
+                        if root.refresh-fill > 0.75 : Path {
+                            width: 12px; height: 12px;
+                            viewbox-x: 0; viewbox-y: 0; viewbox-width: 12; viewbox-height: 12;
+                            fill: root.api-ok ? #4ac87a : #555555;
+                            MoveTo { x: 6; y: 6; }
+                            LineTo { x: 6; y: 0; }
+                            ArcTo { radius-x: 6; radius-y: 6; x-rotation: 0; large-arc: false; sweep: true; x: 12; y: 6; }
+                            Close {}
+                        }
                     }
                 }
             }
@@ -941,19 +1011,23 @@ export component AppWindow inherits Window {
                     x: (parent.width - self.width) / 2;
                     y: (parent.height - self.height) / 2;
                     image-fit: contain;
-                    opacity: 0.25;
+                    opacity: 0.05;
                 }
 
                 Flickable {
                     x: 0; y: 0; width: parent.width; height: parent.height;
                     viewport-height: log-inner.preferred-height + 28px;
 
-                    log-inner := Text {
+                    log-inner := TextInput {
                         x: 16px; y: 14px;
                         width: parent.width - 32px;
                         text: root.log-text;
                         font-family: "JetBrains Mono"; font-size: 12px;
-                        color: #6b8faa; wrap: word-wrap;
+                        color: #6b8faa;
+                        single-line: false;
+                        read-only: true;
+                        selection-background-color: #4a6bd430;
+                        selection-foreground-color: #b0ccee;
                     }
                 }
             }
@@ -1026,8 +1100,14 @@ export component AppWindow inherits Window {
 
                 ModeToggleRow {
                     label: "Авто-старт Seed";
-                    hint: "Автоматически начинать сидинг при запуске приложения";
+                    hint: "Автоматически начинать seeding при запуске приложения";
                     checked <=> root.cfg-auto-start;
+                }
+
+                ModeToggleRow {
+                    label: "Авто-обновление";
+                    hint: "Автоматически применять обновления при запуске приложения";
+                    checked <=> root.cfg-auto-update;
                 }
 
                 // Never start seeding after
@@ -1096,7 +1176,7 @@ export component AppWindow inherits Window {
 
                 ModeToggleRow {
                     label: "Удалить стартовое видео";
-                    hint: "Удаляет интро 'Welcom to Squad!' перед запуском.";
+                    hint: "Удаляет интро 'Welcome to Squad!' перед запуском.";
                     checked <=> root.cfg-delete-startup-video;
                 }
                 ModeToggleRow { label: "Создать сквад"; hint: "Кратко переключает Squad для создания отряда через консоль"; checked <=> root.cfg-auto-create-squad; }
@@ -1318,7 +1398,7 @@ export component AppWindow inherits Window {
                 }
                 Rectangle { height: 8px; }
                 Text {
-                    text: "Сидинг будет остановлен, Squad закроется, а настройки будут сохранены.";
+                    text: "Seeding будет остановлен, Squad закроется, а настройки будут восстановлены.";
                     color: #6b6b6b; font-size: 13px; wrap: word-wrap;
                 }
                 Rectangle { height: 22px; }
@@ -1475,7 +1555,7 @@ export component AppWindow inherits Window {
                 padding: 26px; spacing: 0px;
 
                 Text {
-                    text: "Режим без рендера (-nullrhi)";
+                    text: "Режим без рендера";
                     color: #e5e5e5; font-size: 15px; font-weight: 700;
                 }
                 Rectangle { height: 8px; }
@@ -1571,6 +1651,63 @@ export component AppWindow inherits Window {
                             color: #929292; font-size: 13.5px; font-weight: 600;
                             horizontal-alignment: center; vertical-alignment: center;
                         }
+                    }
+                }
+            }
+        }
+    }
+
+    // ── After-hours warning ────────────────────────────────────────────────────
+    if root.show-after-hours-prompt : Rectangle {
+        x: 0; y: 0; width: parent.width; height: parent.height;
+        background: #00000099;
+        TouchArea { x: 0; y: 0; width: parent.width; height: parent.height; }
+        Rectangle {
+            x: (parent.width - 480px) / 2;
+            y: (parent.height - 240px) / 2;
+            width: 480px; height: 240px;
+            border-radius: 14px; background: #252525;
+            border-width: 1px; border-color: #ae3c2c80;
+            drop-shadow-blur: 48px; drop-shadow-color: #000000cc;
+            TouchArea { x: 0; y: 0; width: parent.width; height: parent.height; }
+            VerticalLayout {
+                padding: 26px; spacing: 0px;
+                Text { text: "Слишком поздно!"; color: #e5e5e5; font-size: 15px; font-weight: 700; }
+                Rectangle { height: 8px; }
+                Text {
+                    text: "Установленное ограничение по времени уже наступило.\nВы всё равно хотите начать сидинг?";
+                    color: #d4816e; font-size: 13px; wrap: word-wrap;
+                }
+                Rectangle { height: 22px; }
+                HorizontalLayout {
+                    spacing: 8px; height: 42px;
+                    Rectangle {
+                        horizontal-stretch: 1; border-radius: 9px;
+                        background: ah-yes.has-hover ? #46c07a : #3ca96e;
+                        ah-yes := TouchArea {
+                            clicked => { root.show-after-hours-prompt = false; root.force-start-seed(); }
+                            mouse-cursor: pointer;
+                        }
+                        Text { text: "Да, начать"; color: #101c12; font-size: 13.5px; font-weight: 700; horizontal-alignment: center; vertical-alignment: center; }
+                    }
+                    Rectangle {
+                        horizontal-stretch: 1; border-radius: 9px;
+                        background: ah-exit.has-hover ? #b54040 : #a13a3a;
+                        ah-exit := TouchArea {
+                            clicked => { root.show-after-hours-prompt = false; root.exit-app(); }
+                            mouse-cursor: pointer;
+                        }
+                        Text { text: "Нет, Выйти"; color: #f5e5e0; font-size: 13.5px; font-weight: 700; horizontal-alignment: center; vertical-alignment: center; }
+                    }
+                    Rectangle {
+                        width: 100px; border-radius: 9px;
+                        background: ah-cancel.has-hover ? #333333 : #272727;
+                        border-width: 1px; border-color: #ffffff10;
+                        ah-cancel := TouchArea {
+                            clicked => { root.show-after-hours-prompt = false; }
+                            mouse-cursor: pointer;
+                        }
+                        Text { text: "Отмена"; color: #555555; font-size: 13px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
                     }
                 }
             }

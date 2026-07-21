@@ -6,6 +6,7 @@ use std::time::Duration;
 
 const HUB_API: &str = "https://api.hub.pstnsquad.ru/api/v1/public";
 const SEEDING_API: &str = "https://seeding.pstnsquad.ru/api";
+const APP_ARCH: &str = env!("APP_ARCH"); // baked in at compile time by build.rs
 
 pub const SERVER_TAGS: [(u8, &str); 4] = [(1, "A"), (2, "B"), (3, "C"), (4, "D")];
 pub const SERVER_NAMES: [(u8, &str); 4] = [
@@ -187,32 +188,33 @@ impl HubApi {
     pub async fn get_latest_version(&self) -> Result<String> {
         let resp = self
             .client
-            .get(format!("{HUB_API}/version"))
+            .get(format!("{HUB_API}/seeder/version"))
             .send()
             .await
-            .context("GET /version")?
+            .context("GET /seeder/version")?
             .error_for_status()
-            .context("GET /version status")?
+            .context("GET /seeder/version status")?
             .json::<VersionResponse>()
             .await
-            .context("GET /version parse")?;
+            .context("GET /seeder/version parse")?;
         Ok(resp.version)
     }
 
-    /// Download the update binary. Returns raw bytes.
+    /// Download the installer for the current arch. Returns raw bytes.
+    /// Platform is "x64" or "x86", determined at compile time.
     pub async fn download_update(&self) -> Result<Vec<u8>> {
         let resp = self
             .client
-            .get(format!("{HUB_API}/download"))
+            .get(format!("{HUB_API}/download/{APP_ARCH}"))
             .timeout(Duration::from_secs(300))
             .send()
             .await
-            .context("GET /download")?
+            .context("GET /download/{APP_ARCH}")?
             .error_for_status()
-            .context("GET /download status")?
+            .context("GET /download/{APP_ARCH} status")?
             .bytes()
             .await
-            .context("GET /download read")?;
+            .context("GET /download/{APP_ARCH} read")?;
         Ok(resp.to_vec())
     }
 

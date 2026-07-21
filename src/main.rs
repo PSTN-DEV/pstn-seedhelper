@@ -26,6 +26,9 @@ fn main() {
     // Keep the runtime active on the main thread so tokio::spawn works in Slint callbacks
     let _guard = rt.enter();
 
+    // Force 1x scale on all DPI settings — avoids blurry upscaling on high-res screens
+    std::env::set_var("SLINT_SCALE_FACTOR", "1");
+
     let window = AppWindow::new().expect("Slint window init failed");
 
     app::setup(window.as_weak());

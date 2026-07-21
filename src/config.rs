@@ -58,6 +58,7 @@ pub struct Config {
     pub disable_sound: bool,
     pub delete_startup_video: bool,
     pub eco_mode: bool,
+    pub auto_update: bool,
     pub theme: Theme,
 
     // None = disabled, Some("HH:MM") = scheduled shutdown
@@ -90,6 +91,7 @@ impl Default for Config {
             disable_sound: true,
             delete_startup_video: false,
             eco_mode: false,
+            auto_update: false,
             theme: Theme::Dark,
             scheduled_shutdown: None,
         }

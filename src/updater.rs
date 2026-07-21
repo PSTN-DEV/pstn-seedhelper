@@ -3,10 +3,16 @@ use crate::app::AppState;
 
 const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// Called once on startup. Sets the update notice in the UI if a newer version is available.
+/// Called once on startup. Auto-applies if enabled, otherwise sets the UI update notice.
 pub async fn check(state: &Arc<AppState>) {
     match state.api.get_latest_version().await {
         Ok(remote) if is_newer(&remote, CURRENT_VERSION) => {
+            let auto = state.config.lock().unwrap().auto_update;
+            if auto {
+                let _ = state.log.send(format!("Авто-обновление до v{remote}..."));
+                apply(state, true).await;
+                return;
+            }
             let notice = format!("Доступно обновление v{remote}  (текущая v{CURRENT_VERSION})");
             let _ = state.window.upgrade_in_event_loop(move |w| {
                 w.set_update_notice(notice.into());
@@ -17,9 +23,11 @@ pub async fn check(state: &Arc<AppState>) {
     }
 }
 
-/// Download and self-replace. Spawns a helper bat then exits.
-pub async fn apply(state: &Arc<AppState>) {
-    let _ = state.log.send("Скачиваем обновление...".into());
+/// Download the installer and launch it, then exit.
+/// `silent = true`  → passes /VERYSILENT (auto-update, no UI, app relaunches after install).
+/// `silent = false` → no flags (user sees the normal install wizard).
+pub async fn apply(state: &Arc<AppState>, silent: bool) {
+    let _ = state.log.send("Скачиваем установщик обновления...".into());
 
     let bytes: Vec<u8> = match state.api.download_update().await {
         Ok(b) => b,
@@ -29,35 +37,19 @@ pub async fn apply(state: &Arc<AppState>) {
         }
     };
 
-    let tmp = std::env::temp_dir().join("seed_helper_update.exe");
-    if let Err(e) = std::fs::write(&tmp, &bytes) {
-        let _ = state.log.send(format!("Ошибка записи обновления: {e}"));
+    let installer = std::env::temp_dir().join("pstn-seedhelper-setup.exe");
+    if let Err(e) = std::fs::write(&installer, &bytes) {
+        let _ = state.log.send(format!("Ошибка записи установщика: {e}"));
         return;
     }
 
-    // Write a bat that waits 2s, replaces the exe, then launches the new version
-    let current_exe = match std::env::current_exe() {
-        Ok(p) => p,
-        Err(e) => { let _ = state.log.send(format!("{e}")); return; }
-    };
-
-    let bat = std::env::temp_dir().join("seed_helper_update.bat");
-    let bat_content = format!(
-        "@echo off\ntimeout /t 2 /nobreak >nul\nmove /y \"{}\" \"{}\"\nstart \"\" \"{}\"\ndel \"%~f0\"\n",
-        tmp.display(), current_exe.display(), current_exe.display()
-    );
-
-    if let Err(e) = std::fs::write(&bat, bat_content) {
-        let _ = state.log.send(format!("Ошибка записи bat: {e}"));
-        return;
+    let _ = state.log.send("Запускаем установщик...".into());
+    let mut cmd = std::process::Command::new(&installer);
+    if silent { cmd.arg("/VERYSILENT"); }
+    match cmd.spawn() {
+        Ok(_) => std::process::exit(0),
+        Err(e) => { let _ = state.log.send(format!("Не удалось запустить установщик: {e}")); }
     }
-
-    let _ = state.log.send("Перезапускаем для применения обновления...".into());
-    let _ = std::process::Command::new("cmd")
-        .args(["/c", &bat.to_string_lossy()])
-        .spawn();
-
-    std::process::exit(0);
 }
 
 /// Simple semver comparison: returns true if `remote` > `current`.

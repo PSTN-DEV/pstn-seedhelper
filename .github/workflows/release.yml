@@ -65,19 +65,18 @@ jobs:
             /DAppArch=${{ matrix.arch }} `
             installer.iss
 
-      # ── Signing (add after SignPath project is approved) ──────────────────
-      # - name: Sign installer
-      #   uses: signpath/github-action-submit-signing-request@v1
-      #   with:
-      #     api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
-      #     organization-id: ${{ secrets.SIGNPATH_ORG_ID }}
-      #     project-slug: pstn-seedhelper
-      #     signing-policy-slug: release-signing
-      #     artifact-configuration-slug: installer
-      #     github-artifact-name: installer
-      #     wait-for-completion: true
-      #     output-artifact-directory: Output
-      # ─────────────────────────────────────────────────────────────────────
+      - name: Sign installer
+        if: steps.version.outputs.IS_PRERELEASE == 'false'
+        uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ secrets.SIGNPATH_ORG_ID }}
+          project-slug: pstn-seedhelper
+          signing-policy-slug: release-signing
+          artifact-configuration-slug: installer
+          github-artifact-name: installer
+          wait-for-completion: true
+          output-artifact-directory: Output
 
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
@@ -86,15 +85,38 @@ jobs:
           generate_release_notes: true
           prerelease: ${{ steps.version.outputs.IS_PRERELEASE == 'true' }}
 
-  cleanup:
+  archive:
     runs-on: ubuntu-latest
     needs: release
 
     steps:
-      - name: Delete old releases
-        uses: dev-drprasad/delete-older-releases@v0.3.4
+      - name: Archive old releases
+        uses: actions/github-script@v7
         with:
-          keep_latest: 3
-          delete_tags: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const releases = await github.paginate(github.rest.repos.listReleases, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+            });
+
+            const published = releases
+              .filter(r => !r.draft)
+              .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+
+            const stable     = published.filter(r => !r.prerelease);
+            const prerelease = published.filter(r =>  r.prerelease);
+
+            const toArchive = [
+              ...stable.slice(3),
+              ...prerelease.slice(3),
+            ];
+
+            for (const release of toArchive) {
+              await github.rest.repos.updateRelease({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                release_id: release.id,
+                draft: true,
+              });
+              core.info(`Archived: ${release.tag_name}`);
+            }

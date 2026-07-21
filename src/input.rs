@@ -31,11 +31,15 @@ fn windows_create_squad() -> anyhow::Result<()> {
     use std::mem;
     use windows::Win32::UI::Input::KeyboardAndMouse::*;
     use windows::Win32::UI::WindowsAndMessaging::*;
-    use windows::Win32::Foundation::{HWND, LPARAM, BOOL};
+    use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
+    use windows::Win32::Foundation::{HWND, LPARAM, WPARAM, BOOL};
 
-    const SCANCODE_CONSOLE: u16 = 0x29; // ` / ё  — layout-independent console key
-    const SCANCODE_ENTER: u16   = 0x1C;
-    const SCANCODE_ALT: u16     = 0x38;
+    // Console key: sent via PostMessage(WM_KEYDOWN/WM_CHAR/WM_KEYUP) with explicit
+    // VK_OEM_3 (0xC0) and the '`' character — fully layout-independent.
+    // SendInput uses the window's active layout to translate scancodes, which would
+    // produce ё on Russian/Ukrainian layouts; PostMessage bypasses that entirely.
+    // Command text uses KEYEVENTF_UNICODE — also layout-independent.
+    const SCANCODE_ENTER: u16 = 0x1C;
 
     unsafe fn send_scan(scan: u16, key_up: bool) {
         let flags = KEYEVENTF_SCANCODE | if key_up { KEYEVENTF_KEYUP } else { KEYBD_EVENT_FLAGS(0) };
@@ -73,7 +77,7 @@ fn windows_create_squad() -> anyhow::Result<()> {
         }
     }
 
-    // Find Squad window
+    // Find Squad window by title
     let mut target: HWND = HWND(std::ptr::null_mut());
     unsafe extern "system" fn enum_cb(hwnd: HWND, lparam: LPARAM) -> BOOL {
         let target = &mut *(lparam.0 as *mut HWND);
@@ -82,7 +86,7 @@ fn windows_create_squad() -> anyhow::Result<()> {
         let title = String::from_utf16_lossy(&buf[..len as usize]);
         if (title.contains("SquadGame") || title == "Squad") && IsWindowVisible(hwnd).as_bool() {
             *target = hwnd;
-            return BOOL(0); // stop enumeration
+            return BOOL(0);
         }
         BOOL(1)
     }
@@ -99,29 +103,37 @@ fn windows_create_squad() -> anyhow::Result<()> {
         // Restore if minimized
         if IsIconic(target).as_bool() {
             let _ = ShowWindow(target, SW_RESTORE);
+            std::thread::sleep(std::time::Duration::from_millis(300));
         }
 
-        // Alt press trick to allow SetForegroundWindow
-        send_scan(SCANCODE_ALT, false);
-        send_scan(SCANCODE_ALT, true);
+        // AttachThreadInput is the reliable Win32 way to steal foreground focus
+        // from a background process without the normal UIPI restriction.
+        let squad_tid = GetWindowThreadProcessId(target, None);
+        let our_tid   = GetCurrentThreadId();
+        let _ = AttachThreadInput(our_tid, squad_tid, BOOL(1));
+        let _ = BringWindowToTop(target);
         let _ = SetForegroundWindow(target);
-        std::thread::sleep(std::time::Duration::from_millis(500));
+        let _ = AttachThreadInput(our_tid, squad_tid, BOOL(0));
 
-        if GetForegroundWindow() != target {
-            anyhow::bail!("Не удалось получить фокус окна Squad");
-        }
+        std::thread::sleep(std::time::Duration::from_millis(300));
 
-        // Open console
-        send_scan(SCANCODE_CONSOLE, false);
-        std::thread::sleep(std::time::Duration::from_millis(50));
-        send_scan(SCANCODE_CONSOLE, true);
-        std::thread::sleep(std::time::Duration::from_millis(1000));
+        // Open console via PostMessage — bypasses keyboard layout translation.
+        // SendInput with scancode 0x29 produces ё on Russian/Ukrainian layouts;
+        // PostMessage with explicit VK_OEM_3 (0xC0) + '`' char is always correct.
+        let lp_dn = LPARAM(1_isize | (0x29_isize << 16));
+        let lp_up = LPARAM(1_isize | (0x29_isize << 16) | (0xC000_0000_u32 as i32 as isize));
+        let _ = PostMessageW(target, WM_KEYDOWN, WPARAM(0xC0), lp_dn);
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        let _ = PostMessageW(target, WM_CHAR, WPARAM(0x60), lp_dn); // 0x60 = '`'
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        let _ = PostMessageW(target, WM_KEYUP, WPARAM(0xC0), lp_up);
+        std::thread::sleep(std::time::Duration::from_millis(600));
 
-        // Type command (Unicode — layout-independent)
+        // Type command — KEYEVENTF_UNICODE bypasses keyboard layout entirely
         for ch in "createsquad 12 0".chars() {
             send_unicode(ch);
         }
-        std::thread::sleep(std::time::Duration::from_millis(500));
+        std::thread::sleep(std::time::Duration::from_millis(300));
 
         // Confirm
         send_scan(SCANCODE_ENTER, false);

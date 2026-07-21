@@ -41,6 +41,9 @@ ArchitecturesAllowed=x64os
 UninstallDisplayIcon={app}\{#AppExe}
 UninstallDisplayName={#AppName}
 MinVersion=10.0
+; App exits before the installer runs (Rust calls process::exit first),
+; so skip the "please close running apps" dialog entirely.
+CloseApplications=no
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
@@ -57,7 +60,10 @@ Name: "{group}\Uninstall";     Filename: "{uninstallexe}"
 Name: "{commondesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: desktopicon
 
 [Run]
+; Normal install: checkbox on Finish page, skipped in silent mode
 Filename: "{app}\{#AppExe}"; Description: "Launch {#AppName}"; Flags: nowait postinstall skipifsilent
+; Silent auto-update: always relaunch after install (WizardSilent = /SILENT or /VERYSILENT was passed)
+Filename: "{app}\{#AppExe}"; Flags: nowait; Check: WizardSilent
 
 [Code]
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);

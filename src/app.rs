@@ -1,5 +1,7 @@
 use std::io::Write;
 use std::sync::{Arc, Mutex};
+
+const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
@@ -39,6 +41,7 @@ pub fn setup(window: slint::Weak<AppWindow>) {
     {
         let w = window.upgrade().unwrap();
         sync_config_to_ui(&w, &cfg);
+        w.set_app_version(CURRENT_VERSION.into());
     }
 
     let state = Arc::new(AppState {
@@ -59,6 +62,17 @@ pub fn setup(window: slint::Weak<AppWindow>) {
     tokio::spawn(seed_order_poll(state.clone()));
     tokio::spawn(shutdown_scheduler(state.clone()));
     tokio::spawn(updater::check(state.clone()));
+
+    // Slint ComboBox/two-way bindings may fire changed handlers during first render;
+    // schedule a final dirty reset to run after the event loop processes init events.
+    {
+        let win = window.clone();
+        slint::invoke_from_event_loop(move || {
+            if let Some(w) = win.upgrade() {
+                w.set_settings_dirty(false);
+            }
+        }).ok();
+    }
 
     // Auto-start seeding (with optional startup delay)
     let (auto, wait_mins) = {
@@ -84,6 +98,10 @@ fn connect_callbacks(window: slint::Weak<AppWindow>, state: Arc<AppState>) {
     {
         let s = state.clone();
         w.on_start_seed(move || start_seeding(s.clone()));
+    }
+    {
+        let s = state.clone();
+        w.on_force_start_seed(move || do_start_seeding(s.clone()));
     }
     {
         let s = state.clone();
@@ -142,7 +160,7 @@ fn connect_callbacks(window: slint::Weak<AppWindow>, state: Arc<AppState>) {
         let s = state.clone();
         w.on_apply_update(move || {
             let s = s.clone();
-            tokio::spawn(async move { crate::updater::apply(&s).await; });
+            tokio::spawn(async move { crate::updater::apply(&s, false).await; });
         });
     }
     {
@@ -154,9 +172,9 @@ fn connect_callbacks(window: slint::Weak<AppWindow>, state: Arc<AppState>) {
     }
     {
         w.on_open_website(|| {
-            let _ = std::process::Command::new("cmd")
-                .args(["/c", "start", "", "https://pstnsquad.ru/"])
-                .spawn();
+            let mut cmd = std::process::Command::new("cmd");
+            cmd.args(["/c", "start", "", "https://pstnsquad.ru/"]);
+            let _ = spawn_hidden(&mut cmd);
         });
     }
     {
@@ -279,6 +297,22 @@ fn connect_callbacks(window: slint::Weak<AppWindow>, state: Arc<AppState>) {
             }
         });
 
+        // After drag ends, recommit the logical window size so Slint recalculates the
+        // correct physical size at the current DPI. Fixes elements appearing scaled wrong
+        // after moving the window from a high-DPI monitor to a low-DPI one.
+        let win_drag_end = window.clone();
+        w.on_window_drag_ended(move || {
+            if let Some(app) = win_drag_end.upgrade() {
+                let sf = app.window().scale_factor();
+                let phys_h = app.window().size().height;
+                let logical_h = (phys_h as f32 / sf).clamp(780.0, 920.0);
+                app.window().set_size(slint::WindowSize::Logical(slint::LogicalSize {
+                    width: 960.0,
+                    height: logical_h,
+                }));
+            }
+        });
+
         w.on_window_minimize(|| crate::platform::minimize_window());
     }
 }
@@ -286,6 +320,22 @@ fn connect_callbacks(window: slint::Weak<AppWindow>, state: Arc<AppState>) {
 // ── Seeding control ───────────────────────────────────────────────────────────
 
 fn start_seeding(state: Arc<AppState>) {
+    let (time_enabled, limit_h, limit_m) = {
+        let cfg = state.config.lock().unwrap();
+        (cfg.time_limit_enabled, cfg.time_limit_hour, cfg.time_limit_minute)
+    };
+    if time_enabled {
+        use chrono::Timelike;
+        let now = chrono::Local::now();
+        if now.hour() * 60 + now.minute() >= limit_h * 60 + limit_m {
+            let _ = state.window.upgrade_in_event_loop(|w| w.set_show_after_hours_prompt(true));
+            return;
+        }
+    }
+    do_start_seeding(state);
+}
+
+fn do_start_seeding(state: Arc<AppState>) {
     let mut guard = state.seed_token.lock().unwrap();
     if guard.is_some() {
         state.log("Seed уже запущен");
@@ -355,13 +405,13 @@ fn perform_after_seed_action(cfg: &Config, state: &Arc<AppState>) {
         AfterSeedAction::CloseAndExit => std::process::exit(0),
         AfterSeedAction::Shutdown => {
             state.log("Выключение компьютера...");
-            let _ = std::process::Command::new("shutdown").args(["/s", "/t", "60"]).spawn();
+            let _ = spawn_hidden(std::process::Command::new("shutdown").args(["/s", "/t", "60"]));
         }
         AfterSeedAction::Sleep => {
             state.log("Спящий режим...");
-            let _ = std::process::Command::new("rundll32.exe")
-                .args(["powrprof.dll,SetSuspendState", "0,1,0"])
-                .spawn();
+            let mut cmd = std::process::Command::new("rundll32.exe");
+            cmd.args(["powrprof.dll,SetSuspendState", "0,1,0"]);
+            let _ = spawn_hidden(&mut cmd);
         }
     }
 }
@@ -456,11 +506,14 @@ async fn process_watch_loop(state: Arc<AppState>) {
     }
 }
 
-/// Polls /api/v1/health every 30 seconds for the status bar indicator.
+/// Polls /api/v1/health every 30 seconds; requires 2 consecutive successes before showing OK.
 async fn api_health_loop(state: Arc<AppState>) {
+    let mut consecutive_ok: u8 = 0;
     loop {
         let ok = state.api.health_check().await;
-        let _ = state.window.upgrade_in_event_loop(move |w| w.set_api_ok(ok));
+        if ok { consecutive_ok = consecutive_ok.saturating_add(1); } else { consecutive_ok = 0; }
+        let show_ok = consecutive_ok >= 2;
+        let _ = state.window.upgrade_in_event_loop(move |w| w.set_api_ok(show_ok));
         tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
     }
 }
@@ -504,7 +557,7 @@ async fn shutdown_scheduler(state: Arc<AppState>) {
         if now.hour() == parts[0] && now.minute() == parts[1] && last_fired != Some(today) {
             last_fired = Some(today);
             state.log(format!("Запланированное выключение в {time_str}..."));
-            let _ = std::process::Command::new("shutdown").args(["/s", "/t", "0", "/hybrid"]).spawn();
+            let _ = spawn_hidden(std::process::Command::new("shutdown").args(["/s", "/t", "0", "/hybrid"]));
         }
     }
 }
@@ -558,6 +611,7 @@ fn sync_config_to_ui(w: &AppWindow, cfg: &Config) {
     } else {
         w.set_cfg_shutdown_enabled(false);
     }
+    w.set_cfg_auto_update(cfg.auto_update);
     // Reset after all properties are set so changed-handlers don't leave dirty=true
     w.set_settings_dirty(false);
 }
@@ -613,6 +667,7 @@ fn save_settings(state: Arc<AppState>) {
         } else {
             None
         };
+        cfg.auto_update          = w.get_cfg_auto_update();
 
         new_startup = cfg.start_on_startup;
         config::save(&cfg);
@@ -672,5 +727,15 @@ fn parse_after_action(s: &slint::SharedString) -> AfterSeedAction {
         "Завершение Работы"    => AfterSeedAction::Shutdown,
         "Спящий Режим"         => AfterSeedAction::Sleep,
         _                      => AfterSeedAction::Nothing,
+    }
+}
+
+fn spawn_hidden(cmd: &mut std::process::Command) -> std::io::Result<std::process::Child> {
+    #[cfg(windows)] {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000).spawn()
+    }
+    #[cfg(not(windows))] {
+        cmd.spawn()
     }
 }
