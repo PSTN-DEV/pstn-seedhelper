@@ -19,3 +19,6 @@
 ```bash
 cargo build --release --target x86_64-pc-windows-msvc
 ```
+
+## Known Issues (Известные Проблемы):
+- Курсор мыши лагает в Eco-режиме. Связано с плохой имплементацией "software cursor" от разработчиков.
