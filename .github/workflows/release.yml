@@ -65,19 +65,6 @@ jobs:
             /DAppArch=${{ matrix.arch }} `
             installer.iss
 
-      - name: Sign installer
-        if: steps.version.outputs.IS_PRERELEASE == 'false'
-        uses: signpath/github-action-submit-signing-request@v1
-        with:
-          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
-          organization-id: ${{ secrets.SIGNPATH_ORG_ID }}
-          project-slug: pstn-seedhelper
-          signing-policy-slug: release-signing
-          artifact-configuration-slug: installer
-          github-artifact-name: installer
-          wait-for-completion: true
-          output-artifact-directory: Output
-
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
