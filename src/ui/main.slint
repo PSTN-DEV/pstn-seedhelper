@@ -412,7 +412,7 @@ component SectionDivider inherits VerticalLayout {
 // ── AppWindow ──────────────────────────────────────────────────────────────────
 
 export component AppWindow inherits Window {
-    title: "Seed Helper v4.0";
+    title: "Seed Helper v\{root.app-version}";
     icon: @image-url("../../icons/seeder.svg");
     no-frame: true;
     background: transparent;
@@ -597,7 +597,7 @@ export component AppWindow inherits Window {
                         VerticalLayout {
                             alignment: center; spacing: 0px;
                             Text { text: "Seed Helper"; color: logo-ta.has-hover ? #c13520 : #e5e5e5; font-size: 13px; font-weight: 600; }
-                            Text { text: "v4.0"; color: #6b6b6b; font-family: "JetBrains Mono"; font-size: 10px; }
+                            Text { text: "v\{root.app-version}"; color: #6b6b6b; font-family: "JetBrains Mono"; font-size: 10px; }
                         }
                     }
                 }
@@ -914,7 +914,7 @@ export component AppWindow inherits Window {
                 spacing: 8px; padding-bottom: 12px;
                 ServerRow {
                     status: root.servers[0];
-                    joining-active: root.joining-active;
+                    joining-active: root.joining-active || root.seeding-active;
                     is-pending: root.joining-active && root.pending-join-server == 1;
                     join => {
                         root.pending-join-server = 1;
@@ -926,7 +926,7 @@ export component AppWindow inherits Window {
                 }
                 ServerRow {
                     status: root.servers[1];
-                    joining-active: root.joining-active;
+                    joining-active: root.joining-active || root.seeding-active;
                     is-pending: root.joining-active && root.pending-join-server == 2;
                     join => {
                         root.pending-join-server = 2;
@@ -938,7 +938,7 @@ export component AppWindow inherits Window {
                 }
                 ServerRow {
                     status: root.servers[2];
-                    joining-active: root.joining-active;
+                    joining-active: root.joining-active || root.seeding-active;
                     is-pending: root.joining-active && root.pending-join-server == 3;
                     join => {
                         root.pending-join-server = 3;
@@ -950,7 +950,7 @@ export component AppWindow inherits Window {
                 }
                 ServerRow {
                     status: root.servers[3];
-                    joining-active: root.joining-active;
+                    joining-active: root.joining-active || root.seeding-active;
                     is-pending: root.joining-active && root.pending-join-server == 4;
                     join => {
                         root.pending-join-server = 4;

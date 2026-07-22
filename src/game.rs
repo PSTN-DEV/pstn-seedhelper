@@ -1,9 +1,9 @@
 use anyhow::{bail, Context, Result};
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
 use tokio::time::{sleep, Duration};
 use tokio_util::sync::CancellationToken;
-#[cfg(windows)]
-use std::os::windows::process::CommandExt;
 
 use crate::app::LogSender;
 use crate::config::{self, Config};
@@ -15,7 +15,10 @@ const SQUAD_APP_ID: &str = "393380";
 pub fn validate_config(cfg: &Config) -> Result<()> {
     if cfg.eco_mode {
         if !config::game_settings_path().exists() {
-            bail!("GameUserSettings.ini не найден: {:?}", config::game_settings_path());
+            bail!(
+                "GameUserSettings.ini не найден: {:?}",
+                config::game_settings_path()
+            );
         }
         if find_squad_launcher().is_none() {
             bail!("squad_launcher.exe не найден — укажите путь в настройках или установите Squad через Steam");
@@ -44,10 +47,8 @@ pub fn write_fps_keys(fps: Option<u32>, menu_fps: Option<u32>) -> Result<()> {
     let content = content.trim_start_matches('\u{feff}');
 
     const TARGET_SECTION: &str = "[/Script/Squad.SQGameUserSettings]";
-    let keys: [(&str, Option<u32>); 2] = [
-        ("FrameRateLimit", fps),
-        ("MenuFrameRateLimit", menu_fps),
-    ];
+    let keys: [(&str, Option<u32>); 2] =
+        [("FrameRateLimit", fps), ("MenuFrameRateLimit", menu_fps)];
 
     let mut out = Vec::<String>::new();
     let mut in_section = false;
@@ -66,7 +67,10 @@ pub fn write_fps_keys(fps: Option<u32>, menu_fps: Option<u32>) -> Result<()> {
             section_end_idx = Some(out.len());
         }
         if in_section {
-            if let Some(&(key, val)) = keys.iter().find(|(k, _)| trimmed.starts_with(&format!("{k}="))) {
+            if let Some(&(key, val)) = keys
+                .iter()
+                .find(|(k, _)| trimmed.starts_with(&format!("{k}=")))
+            {
                 if let Some(n) = val {
                     out.push(format!("{key}={:.6}", n as f64));
                     found.insert(key);
@@ -115,7 +119,8 @@ fn detect_squad_via_steam() -> Option<PathBuf> {
     let out = {
         let mut cmd = std::process::Command::new("reg");
         cmd.args(["query", r"HKCU\Software\Valve\Steam", "/v", "SteamPath"]);
-        #[cfg(windows)] cmd.creation_flags(0x08000000);
+        #[cfg(windows)]
+        cmd.creation_flags(0x08000000);
         cmd.output().ok()?
     };
     let stdout = String::from_utf8_lossy(&out.stdout);
@@ -127,20 +132,28 @@ fn detect_squad_via_steam() -> Option<PathBuf> {
         .trim()
         .to_owned();
 
-    let default_squad = PathBuf::from(&steam_path).join("steamapps").join("common").join("Squad");
+    let default_squad = PathBuf::from(&steam_path)
+        .join("steamapps")
+        .join("common")
+        .join("Squad");
     if default_squad.exists() {
         return Some(default_squad);
     }
 
     let vdf = std::fs::read_to_string(
-        PathBuf::from(&steam_path).join("steamapps").join("libraryfolders.vdf"),
+        PathBuf::from(&steam_path)
+            .join("steamapps")
+            .join("libraryfolders.vdf"),
     )
     .ok()?;
     for line in vdf.lines() {
         let t = line.trim();
         if t.starts_with("\"path\"") {
             if let Some(p) = t.split('"').nth(3) {
-                let squad = PathBuf::from(p).join("steamapps").join("common").join("Squad");
+                let squad = PathBuf::from(p)
+                    .join("steamapps")
+                    .join("common")
+                    .join("Squad");
                 if squad.exists() {
                     return Some(squad);
                 }
@@ -196,9 +209,16 @@ pub async fn launch_game_eco(
     let mut args: Vec<&str> = Vec::new();
 
     if cfg.render_toggle {
-        args.extend(["-nullrhi", "-NoAsyncPostLoad", "-noshaderworker",
-                     "-norenderthread", "-NoShaderCompile", "-log", "-nosplash"]);
-        let _ = log.send("Squad запущен без рендера (eco, -nullrhi)".into());
+        args.extend([
+            "-nullrhi",
+            "-NoAsyncPostLoad",
+            "-noshaderworker",
+            "-norenderthread",
+            "-NoShaderCompile",
+            "-log",
+            "-nosplash",
+        ]);
+        let _ = log.send("Squad запущен без рендера. ОПАСНО!".into());
     } else {
         args.extend(["-windowed", "-ResX=1", "-ResY=1"]);
         let _ = log.send("Squad запущен в эко режиме (окно 1×1)".into());
@@ -274,7 +294,8 @@ pub async fn launch_game_steam(
 pub fn open_steam_url(url: &str) -> Result<()> {
     let mut cmd = std::process::Command::new("cmd");
     cmd.args(["/c", "start", "", url]);
-    #[cfg(windows)] cmd.creation_flags(0x08000000);
+    #[cfg(windows)]
+    cmd.creation_flags(0x08000000);
     cmd.spawn().context("Ошибка открытия steam URL")?;
     Ok(())
 }

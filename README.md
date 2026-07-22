@@ -22,4 +22,4 @@ cargo build --release --target x86_64-pc-windows-msvc
 
 ## License
 
-MIT
+GNU GPLv3

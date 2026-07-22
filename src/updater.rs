@@ -1,5 +1,5 @@
-use std::sync::Arc;
 use crate::app::AppState;
+use std::sync::Arc;
 
 const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -9,17 +9,24 @@ pub async fn check(state: &Arc<AppState>) {
         Ok(remote) if is_newer(&remote, CURRENT_VERSION) => {
             let auto = state.config.lock().unwrap().auto_update;
             if auto {
-                let _ = state.log.send(format!("Авто-обновление до v{remote}..."));
+                state
+                    .updating
+                    .store(true, std::sync::atomic::Ordering::Release);
+                let _ = state.log.send(format!("Авто-обновление до {remote}..."));
                 apply(state, true).await;
                 return;
             }
-            let notice = format!("Доступно обновление v{remote}  (текущая v{CURRENT_VERSION})");
+            let notice = format!("Доступно обновление {remote}  (текущая v{CURRENT_VERSION})");
             let _ = state.window.upgrade_in_event_loop(move |w| {
                 w.set_update_notice(notice.into());
             });
         }
         Ok(_) => {} // already up to date
-        Err(e) => { let _ = state.log.send(format!("Не удалось проверить обновление: {e}")); }
+        Err(e) => {
+            let _ = state
+                .log
+                .send(format!("Не удалось проверить обновление: {e}"));
+        }
     }
 }
 
@@ -45,10 +52,16 @@ pub async fn apply(state: &Arc<AppState>, silent: bool) {
 
     let _ = state.log.send("Запускаем установщик...".into());
     let mut cmd = std::process::Command::new(&installer);
-    if silent { cmd.arg("/VERYSILENT"); }
+    if silent {
+        cmd.arg("/VERYSILENT");
+    }
     match cmd.spawn() {
         Ok(_) => std::process::exit(0),
-        Err(e) => { let _ = state.log.send(format!("Не удалось запустить установщик: {e}")); }
+        Err(e) => {
+            let _ = state
+                .log
+                .send(format!("Не удалось запустить установщик: {e}"));
+        }
     }
 }
 
