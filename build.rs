@@ -15,7 +15,6 @@ fn main() {
         res.set("FileDescription", "Seed Helper");
         res.set("ProductName", "Seed Helper");
         res.set("CompanyName", "PSTN Squad");
-        res.set("LegalCopyright", "© PSTN Squad");
         res.set("InternalName", "Seed Helper");
         res.set("OriginalFilename", "Seed Helper.exe");
         res.set("FileVersion", &win_version);

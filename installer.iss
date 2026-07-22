@@ -25,6 +25,7 @@ AppPublisher={#AppPublisher}
 AppPublisherURL={#AppURL}
 AppSupportURL={#AppURL}
 AppUpdatesURL={#AppURL}/releases
+AppContact=https://pstnsquad.ru/
 DefaultDirName={autopf}\Seed Helper
 DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
@@ -54,7 +55,8 @@ CloseApplications=no
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
-Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription: "Additional icons:"; Flags: unchecked
+Name: "desktopicon";   Description: "Create a &desktop shortcut"; GroupDescription: "Additional icons:"; Flags: unchecked
+Name: "deleteinstaller"; Description: "Delete installer after installation"; GroupDescription: "Cleanup:"; Flags: unchecked
 
 [Files]
 Source: "target\{#TargetTriple}\release\{#AppBinary}"; DestDir: "{app}"; DestName: "{#AppExe}"; Flags: ignoreversion
@@ -70,6 +72,13 @@ Filename: "{app}\{#AppExe}"; Description: "Launch {#AppName}"; Flags: nowait pos
 Filename: "{app}\{#AppExe}"; Flags: nowait; Check: WizardSilent
 
 [Code]
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if CurStep = ssDone then
+    if WizardSilent or IsTaskSelected('deleteinstaller') then
+      DeleteFile(ExpandConstant('{srcexe}'));
+end;
+
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var
   ConfigDir: String;
