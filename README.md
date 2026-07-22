@@ -19,7 +19,3 @@ Requires Windows 10 1809 or later — x64 and x86 builds available.
 ```bash
 cargo build --release --target x86_64-pc-windows-msvc
 ```
-
-## License
-
-GNU GPLv3
