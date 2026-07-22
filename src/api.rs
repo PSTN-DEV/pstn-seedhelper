@@ -16,15 +16,6 @@ pub const SERVER_NAMES: [(u8, &str); 4] = [
     (4, "PSTN #4 Все режимы"),
 ];
 
-/// Strips " | pstnsquad.ru" (and similar trailing domain segments) from server names.
-pub fn clean_name(name: &str) -> &str {
-    if let Some(i) = name.find("| pstnsquad") {
-        name[..i].trim_end()
-    } else {
-        name
-    }
-}
-
 pub fn tag_for(server_num: u8) -> Option<&'static str> {
     SERVER_TAGS.iter().find(|(n, _)| *n == server_num).map(|(_, t)| *t)
 }
@@ -48,6 +39,8 @@ pub fn name_for(server_num: u8) -> &'static str {
 #[derive(Deserialize, Debug, Clone, Default)]
 pub struct ServerData {
     pub state: String,
+    #[serde(default)]
+    pub name: String,
     #[serde(default)]
     pub players: u32,
     #[serde(default = "default_max")]

@@ -448,6 +448,7 @@ export component AppWindow inherits Window {
     in-out property <bool>   show-after-hours-prompt: false;
     in-out property <string> app-version: "";
     in-out property <bool>   cfg-auto-update: false;
+    in-out property <int>    player-server: 0;
 
     // cfg properties (Rust-bound — names must not change)
     in-out property <string> cfg-steam-id: "";
@@ -862,7 +863,11 @@ export component AppWindow inherits Window {
                         dot-color: root.steam-running ? #4ac87a : #6b6b6b;
                         glowing: root.steam-running;
                     }
-                    StatusChip { label: "Не на сервере"; dot-color: #6b6b6b; }
+                    StatusChip {
+                        label: root.player-server > 0 ? "На сервере #\{root.player-server}" : "Не на сервере";
+                        dot-color: root.player-server > 0 ? #4ac87a : #6b6b6b;
+                        glowing: root.player-server > 0;
+                    }
                     StatusChip {
                         label: root.api-ok ? "API OK" : "API недоступен";
                         dot-color: root.api-ok ? #50cc7e : #b04030;
@@ -877,55 +882,20 @@ export component AppWindow inherits Window {
                 height: 24px; spacing: 8px;
                 Text { text: "СТАТУС СЕРВЕРОВ"; color: #6b6b6b; font-size: 11.5px; font-weight: 600; letter-spacing: 0.6px; vertical-alignment: center; }
                 Rectangle { horizontal-stretch: 1; }
-                VerticalLayout {
-                    alignment: center;
-                    // ponytail: 4-quadrant pie countdown; CW depletion from 12 o'clock, Q1 depletes first
-                    Rectangle {
-                        width: 12px; height: 12px;
-                        clip: true;
-                        border-radius: 6px;
-                        background: root.api-ok ? #0d2010 : #1a1a1a;
-
-                        // Q4: 9→12 o'clock (last to go, fill > 0)
-                        if root.refresh-fill > 0.0 : Path {
-                            width: 12px; height: 12px;
-                            viewbox-x: 0; viewbox-y: 0; viewbox-width: 12; viewbox-height: 12;
-                            fill: root.api-ok ? #4ac87a : #555555;
-                            MoveTo { x: 6; y: 6; }
-                            LineTo { x: 0; y: 6; }
-                            ArcTo { radius-x: 6; radius-y: 6; x-rotation: 0; large-arc: false; sweep: true; x: 6; y: 0; }
-                            Close {}
+                HorizontalLayout {
+                    alignment: center; spacing: 4px;
+                    VerticalLayout {
+                        alignment: center;
+                        Image {
+                            width: 11px; height: 11px;
+                            source: @image-url("../../icons/rotate-cw.svg");
+                            colorize: #444444;
                         }
-                        // Q3: 6→9 o'clock (fill > 0.25)
-                        if root.refresh-fill > 0.25 : Path {
-                            width: 12px; height: 12px;
-                            viewbox-x: 0; viewbox-y: 0; viewbox-width: 12; viewbox-height: 12;
-                            fill: root.api-ok ? #4ac87a : #555555;
-                            MoveTo { x: 6; y: 6; }
-                            LineTo { x: 6; y: 12; }
-                            ArcTo { radius-x: 6; radius-y: 6; x-rotation: 0; large-arc: false; sweep: true; x: 0; y: 6; }
-                            Close {}
-                        }
-                        // Q2: 3→6 o'clock (fill > 0.5)
-                        if root.refresh-fill > 0.5 : Path {
-                            width: 12px; height: 12px;
-                            viewbox-x: 0; viewbox-y: 0; viewbox-width: 12; viewbox-height: 12;
-                            fill: root.api-ok ? #4ac87a : #555555;
-                            MoveTo { x: 6; y: 6; }
-                            LineTo { x: 12; y: 6; }
-                            ArcTo { radius-x: 6; radius-y: 6; x-rotation: 0; large-arc: false; sweep: true; x: 6; y: 12; }
-                            Close {}
-                        }
-                        // Q1: 12→3 o'clock (first to go, fill > 0.75)
-                        if root.refresh-fill > 0.75 : Path {
-                            width: 12px; height: 12px;
-                            viewbox-x: 0; viewbox-y: 0; viewbox-width: 12; viewbox-height: 12;
-                            fill: root.api-ok ? #4ac87a : #555555;
-                            MoveTo { x: 6; y: 6; }
-                            LineTo { x: 6; y: 0; }
-                            ArcTo { radius-x: 6; radius-y: 6; x-rotation: 0; large-arc: false; sweep: true; x: 12; y: 6; }
-                            Close {}
-                        }
+                    }
+                    Text {
+                        text: "\{root.cfg-checkup-interval - root.refresh-elapsed}s";
+                        color: #444444; font-size: 11px; font-weight: 500;
+                        vertical-alignment: center;
                     }
                 }
             }

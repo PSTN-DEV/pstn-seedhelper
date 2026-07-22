@@ -443,7 +443,10 @@ async fn status_poll_loop(state: Arc<AppState>) {
                     if let Some(d) = servers.get(tag) {
                         if d.is_online() {
                             return ServerStatus {
-                                name: crate::api::clean_name(crate::api::name_for(num)).into(),
+                                name: {
+                                    let raw = if d.name.is_empty() { crate::api::name_for(num).to_string() } else { d.name.clone() };
+                                    raw.find("| pstnsquad").map_or(raw.clone(), |i| raw[..i].trim_end().to_string()).into()
+                                },
                                 online: true,
                                 players: d.players as i32,
                                 max_players: d.max_players as i32,
@@ -455,7 +458,7 @@ async fn status_poll_loop(state: Arc<AppState>) {
                         }
                     }
                     ServerStatus {
-                        name: crate::api::clean_name(crate::api::name_for(num)).into(),
+                        name: crate::api::name_for(num).into(),
                         online: false,
                         players: 0,
                         max_players: 100,
@@ -467,10 +470,22 @@ async fn status_poll_loop(state: Arc<AppState>) {
                 })
                 .collect();
 
+            let steam_id = state.config.lock().unwrap().steam_id.clone();
+            let mut player_server: i32 = 0;
+            if steam_id.len() == 17 {
+                for num in 1u8..=4 {
+                    if let Ok(true) = state.api.check_player(&steam_id, num).await {
+                        player_server = num as i32;
+                        break;
+                    }
+                }
+            }
+
             let _ = state.window.upgrade_in_event_loop(move |w| {
                 use slint::VecModel;
                 use std::rc::Rc;
                 w.set_servers(Rc::new(VecModel::from(cards)).into());
+                w.set_player_server(player_server);
                 w.set_refresh_ping(!w.get_refresh_ping());
             });
         }
