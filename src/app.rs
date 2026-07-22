@@ -534,14 +534,29 @@ async fn status_poll_loop(state: Arc<AppState>) {
 }
 
 /// Checks Squad + Steam process state every 5 seconds — much faster than checkup_interval.
+/// When seeding is active and Squad disappears unexpectedly, waits 10s then kills CrashReportClient.
 async fn process_watch_loop(state: Arc<AppState>) {
+    let mut prev_squad = false;
     loop {
         let (squad, steam) = crate::process::check_processes();
         let _ = state.window.upgrade_in_event_loop(move |w| {
             w.set_squad_running(squad);
             w.set_steam_running(steam);
         });
-        tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+
+        let seeding = state.seed_token.lock().unwrap().is_some();
+        if prev_squad && !squad && seeding {
+            state.log("Squad пропал во время seed — возможный краш, проверяем через 10 сек...");
+            tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
+            if crate::process::find_crash_reporter() {
+                state.log("Обнаружен CrashReportClient — закрываем и ждём перезапуска...");
+                crate::process::kill_crash_reporter();
+            }
+        } else {
+            tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+        }
+
+        prev_squad = squad;
     }
 }
 

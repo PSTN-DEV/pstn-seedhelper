@@ -230,7 +230,7 @@ pub async fn launch_game_eco(
     let launcher = find_squad_launcher()
         .context("squad_launcher.exe не найден — укажите путь в настройках")?;
 
-    write_fps_keys(Some(6), Some(6))?;
+    write_fps_keys(Some(6), Some(100))?;
     std::process::Command::new(&launcher)
         .args(&args)
         .spawn()

@@ -463,7 +463,7 @@ export component AppWindow inherits Window {
     in-out property <bool>   cfg-start-on-startup: false;
     in-out property <bool>   cfg-auto-start: false;
     in-out property <bool>   cfg-render-toggle: false;
-    in-out property <bool>   cfg-auto-create-squad: true;
+    in-out property <bool>   cfg-auto-create-squad: false;
     in-out property <bool>   cfg-disable-sound: true;
     in-out property <bool>   cfg-delete-startup-video: false;
     in-out property <bool>   cfg-eco-mode: false;
@@ -663,10 +663,13 @@ export component AppWindow inherits Window {
             HorizontalLayout {
                 padding-left: 12px; padding-right: 8px; spacing: 8px; alignment: center;
                 Text { text: root.update-notice; color: white; font-size: 12px; vertical-alignment: center; horizontal-stretch: 1; }
-                Rectangle {
-                    width: 80px; height: 22px; background: #2563eb; border-radius: 4px;
-                    TouchArea { clicked => { root.apply-update(); } }
-                    Text { text: "Обновить"; color: white; font-size: 12px; horizontal-alignment: center; vertical-alignment: center; }
+                VerticalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: 80px; height: 22px; background: #2563eb; border-radius: 4px;
+                        TouchArea { clicked => { root.apply-update(); } mouse-cursor: pointer; }
+                        Text { text: "Обновить"; color: white; font-size: 12px; horizontal-alignment: center; vertical-alignment: center; }
+                    }
                 }
             }
         }
@@ -812,21 +815,12 @@ export component AppWindow inherits Window {
 
                 Rectangle {
                     width: 110px; border-radius: 9px;
-                    background: root.update-notice != ""
-                        ? (updta.has-hover ? #3a2020 : #2e1818)
-                        : (updta.has-hover ? #2e2e2e : #272727);
-                    border-width: 1px;
-                    border-color: root.update-notice != "" ? #ae3c2c60 : #ffffff0f;
+                    background: #272727;
+                    border-width: 1px; border-color: #ffffff0f;
                     clip: false;
-                    updta := TouchArea {
-                        clicked => { if (root.update-notice != "") { root.apply-update(); } }
-                        mouse-cursor: root.update-notice != "" ? pointer : default;
-                    }
                     Text {
-                        text: root.update-notice != "" ? "ОБНОВИТЬ" : "v\{root.app-version}";
-                        color: root.update-notice != ""
-                            ? (updta.has-hover ? #f5b8a8 : #d4816e)
-                            : #555555;
+                        text: "v\{root.app-version}";
+                        color: #555555;
                         font-size: 12px; font-weight: 600;
                         horizontal-alignment: center; vertical-alignment: center;
                     }
@@ -1156,8 +1150,6 @@ export component AppWindow inherits Window {
                     hint: "Удаляет интро 'Welcome to Squad!' перед запуском.";
                     checked <=> root.cfg-delete-startup-video;
                 }
-                ModeToggleRow { label: "Создать сквад"; hint: "Кратко переключает Squad для создания отряда через консоль"; checked <=> root.cfg-auto-create-squad; }
-
                 // ── Advanced section (chevron collapsible) ─────────────────
                 Rectangle {
                     height: 36px;
@@ -1194,6 +1186,8 @@ export component AppWindow inherits Window {
 
                 if root.show-advanced : VerticalLayout {
                     spacing: 0px;
+
+                    ModeToggleRow { label: "Создать сквад"; hint: "Кратко переключает Squad для создания отряда через консоль"; checked <=> root.cfg-auto-create-squad; }
 
                     SliderRow {
                         label: "Порог игроков:";

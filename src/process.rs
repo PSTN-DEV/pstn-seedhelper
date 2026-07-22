@@ -25,6 +25,24 @@ pub fn is_squad_client_running() -> bool {
     check_processes().0
 }
 
+pub fn find_crash_reporter() -> bool {
+    let mut sys = System::new();
+    sys.refresh_processes(ProcessesToUpdate::All);
+    sys.processes().values().any(|p| {
+        p.name().to_string_lossy().eq_ignore_ascii_case("CrashReportClient.exe")
+    })
+}
+
+pub fn kill_crash_reporter() {
+    let mut sys = System::new();
+    sys.refresh_processes(ProcessesToUpdate::All);
+    for proc in sys.processes().values() {
+        if proc.name().to_string_lossy().eq_ignore_ascii_case("CrashReportClient.exe") {
+            proc.kill();
+        }
+    }
+}
+
 pub fn kill_squad() {
     let mut sys = System::new();
     sys.refresh_processes(ProcessesToUpdate::All);
