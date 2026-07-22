@@ -1,18 +1,18 @@
 # Seed Helper
 
-A lightweight Windows utility by [PSTN Squad](https://pstnsquad.ru) that automates seeding PSTN game servers.
+Легкое приложение на Windows от [PSTN Squad](https://pstnsquad.ru) которое облегчает seeding серверов PSTN в Squad.
 
-## Download
+## Установка
 
-Grab the latest installer from [Releases](https://github.com/PSTN-DEV/pstn-seedhelper/releases).
+Скачайте установщик последней версии здесь [Releases](https://github.com/PSTN-DEV/pstn-seedhelper/releases).
 
-Requires Windows 10 1809 or later — x64 and x86 builds available.
+Требуется Windows 10 1809 или позднее — x64 и x86 сборки доступны.
 
-## Features
+## Фичи:
 
-- Auto-joins servers that need players to seed
-- Auto-update — installs new versions silently in the background
-- Minimal resource usage
+- Автоматическое присоединение к серверам PSTN.
+- Авто-обновление
+- Минимальная трата ресурсов компьютера
 
 ## Build
 
