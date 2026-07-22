@@ -446,6 +446,9 @@ export component AppWindow inherits Window {
     in-out property <int>    pending-join-server: 0;
     in-out property <bool>   joining-active: false;
     in-out property <bool>   show-after-hours-prompt: false;
+    in-out property <bool>   after-hours-is-auto: false;
+    in-out property <bool>   show-after-seed-confirm: false;
+    in-out property <string> after-seed-confirm-msg: "";
     in-out property <string> app-version: "";
     in-out property <bool>   cfg-auto-update: false;
     in-out property <int>    player-server: 0;
@@ -499,6 +502,8 @@ export component AppWindow inherits Window {
     callback launch-squad-and-join(int);
     callback cancel-squad-join();
     callback force-start-seed();
+    callback confirm-after-seed-proceed();
+    callback confirm-after-seed-cancel();
 
     // ── Internal state ────────────────────────────────────────────────────
 
@@ -537,6 +542,7 @@ export component AppWindow inherits Window {
     changed cfg-shutdown-enabled     => { root.settings-dirty = true; }
     changed cfg-auto-update          => { root.settings-dirty = true; }
     changed refresh-ping             => { refresh-elapsed = 0; }
+    changed log-text                 => { log-flick.viewport-y = min(0px, log-flick.height - log-flick.viewport-height); }
     animate popup-alpha { duration: 220ms; easing: ease-out; }
     private property <float> restore-toast-alpha: restore-toast-visible ? 1.0 : 0.0;
     animate restore-toast-alpha { duration: 220ms; easing: ease-out; }
@@ -968,17 +974,7 @@ export component AppWindow inherits Window {
                 background: #141414; border-radius: 9px;
                 border-width: 1px; border-color: #ffffff0a; clip: true;
 
-                Image {
-                    source: @image-url("../../icons/logo.svg");
-                    width: parent.width * 0.55;
-                    height: parent.height * 0.85;
-                    x: (parent.width - self.width) / 2;
-                    y: (parent.height - self.height) / 2;
-                    image-fit: contain;
-                    opacity: 0.05;
-                }
-
-                Flickable {
+                log-flick := Flickable {
                     x: 0; y: 0; width: parent.width; height: parent.height;
                     viewport-height: log-inner.preferred-height + 28px;
 
@@ -1045,7 +1041,7 @@ export component AppWindow inherits Window {
                 SettingsRow { label: "Действие после Сида:";
                     ComboBox {
                         width: 220px; height: 34px;
-                        model: ["Ничего", "Закрыть игру и Выйти", "Завершение Работы", "Спящий Режим"];
+                        model: ["Ничего", "Закрыть игру и Выйти (Рекомендуется)", "Завершение Работы", "Спящий Режим"];
                         current-value <=> root.cfg-after-action;
                     }
                 }
@@ -1635,18 +1631,18 @@ export component AppWindow inherits Window {
         TouchArea { x: 0; y: 0; width: parent.width; height: parent.height; }
         Rectangle {
             x: (parent.width - 480px) / 2;
-            y: (parent.height - 240px) / 2;
-            width: 480px; height: 240px;
+            y: (parent.height - 220px) / 2;
+            width: 480px; height: 220px;
             border-radius: 14px; background: #252525;
             border-width: 1px; border-color: #ae3c2c80;
             drop-shadow-blur: 48px; drop-shadow-color: #000000cc;
             TouchArea { x: 0; y: 0; width: parent.width; height: parent.height; }
             VerticalLayout {
                 padding: 26px; spacing: 0px;
-                Text { text: "Слишком поздно!"; color: #e5e5e5; font-size: 15px; font-weight: 700; }
+                Text { text: "Лимит времени сидинга"; color: #e5e5e5; font-size: 15px; font-weight: 700; }
                 Rectangle { height: 8px; }
                 Text {
-                    text: "Установленное ограничение по времени уже наступило.\nВы всё равно хотите начать сидинг?";
+                    text: "Установленный лимит времени уже наступил. Хотите продолжить сидинг?";
                     color: #d4816e; font-size: 13px; wrap: word-wrap;
                 }
                 Rectangle { height: 22px; }
@@ -1659,16 +1655,16 @@ export component AppWindow inherits Window {
                             clicked => { root.show-after-hours-prompt = false; root.force-start-seed(); }
                             mouse-cursor: pointer;
                         }
-                        Text { text: "Да, начать"; color: #101c12; font-size: 13.5px; font-weight: 700; horizontal-alignment: center; vertical-alignment: center; }
+                        Text { text: "Продолжить"; color: #101c12; font-size: 13.5px; font-weight: 700; horizontal-alignment: center; vertical-alignment: center; }
                     }
-                    Rectangle {
+                    if root.after-hours-is-auto : Rectangle {
                         horizontal-stretch: 1; border-radius: 9px;
                         background: ah-exit.has-hover ? #b54040 : #a13a3a;
                         ah-exit := TouchArea {
                             clicked => { root.show-after-hours-prompt = false; root.exit-app(); }
                             mouse-cursor: pointer;
                         }
-                        Text { text: "Нет, Выйти"; color: #f5e5e0; font-size: 13.5px; font-weight: 700; horizontal-alignment: center; vertical-alignment: center; }
+                        Text { text: "Выйти"; color: #f5e5e0; font-size: 13.5px; font-weight: 700; horizontal-alignment: center; vertical-alignment: center; }
                     }
                     Rectangle {
                         width: 100px; border-radius: 9px;
@@ -1679,6 +1675,54 @@ export component AppWindow inherits Window {
                             mouse-cursor: pointer;
                         }
                         Text { text: "Отмена"; color: #555555; font-size: 13px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
+                    }
+                }
+            }
+        }
+    }
+
+    // ── After-seed action confirmation ────────────────────────────────────────
+    if root.show-after-seed-confirm : Rectangle {
+        x: 0; y: 0; width: parent.width; height: parent.height;
+        background: #00000099;
+        TouchArea { x: 0; y: 0; width: parent.width; height: parent.height; }
+        Rectangle {
+            x: (parent.width - 480px) / 2;
+            y: (parent.height - 230px) / 2;
+            width: 480px; height: 230px;
+            border-radius: 14px; background: #252525;
+            border-width: 1px; border-color: #ae3c2c80;
+            drop-shadow-blur: 48px; drop-shadow-color: #000000cc;
+            TouchArea { x: 0; y: 0; width: parent.width; height: parent.height; }
+            VerticalLayout {
+                padding: 26px; spacing: 0px;
+                Text { text: "Seeding завершён"; color: #e5e5e5; font-size: 15px; font-weight: 700; }
+                Rectangle { height: 8px; }
+                Text {
+                    text: "Запланированное действие: \{root.after-seed-confirm-msg}\nВыполнить? (авто-выполнение через 60 сек)";
+                    color: #d4816e; font-size: 13px; wrap: word-wrap;
+                }
+                Rectangle { height: 22px; }
+                HorizontalLayout {
+                    spacing: 8px; height: 42px;
+                    Rectangle {
+                        horizontal-stretch: 1; border-radius: 9px;
+                        background: asc-yes.has-hover ? #b54040 : #a13a3a;
+                        asc-yes := TouchArea {
+                            clicked => { root.confirm-after-seed-proceed(); }
+                            mouse-cursor: pointer;
+                        }
+                        Text { text: "Выполнить"; color: #f5e5e0; font-size: 13.5px; font-weight: 700; horizontal-alignment: center; vertical-alignment: center; }
+                    }
+                    Rectangle {
+                        width: 115px; border-radius: 9px;
+                        background: asc-no.has-hover ? #333333 : #2c2c2c;
+                        border-width: 1px; border-color: #ffffff14;
+                        asc-no := TouchArea {
+                            clicked => { root.confirm-after-seed-cancel(); }
+                            mouse-cursor: pointer;
+                        }
+                        Text { text: "Отмена"; color: #929292; font-size: 13.5px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
                     }
                 }
             }

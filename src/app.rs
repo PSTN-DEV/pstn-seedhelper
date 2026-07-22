@@ -19,9 +19,11 @@ pub struct AppState {
     pub api: Arc<HubApi>,
     pub seed_token: Mutex<Option<CancellationToken>>,
     pub join_token: Mutex<Option<CancellationToken>>,
+    pub pending_after_seed: Mutex<Option<config::AfterSeedAction>>,
     pub window: slint::Weak<AppWindow>,
     pub log: LogSender,
     pub updating: std::sync::atomic::AtomicBool,
+    pub seeded_after_hours: std::sync::atomic::AtomicBool,
 }
 
 impl AppState {
@@ -50,9 +52,11 @@ pub fn setup(window: slint::Weak<AppWindow>) {
         api: api.clone(),
         seed_token: Mutex::new(None),
         join_token: Mutex::new(None),
+        pending_after_seed: Mutex::new(None),
         window: window.clone(),
         log: log_tx,
         updating: std::sync::atomic::AtomicBool::new(false),
+        seeded_after_hours: std::sync::atomic::AtomicBool::new(false),
     });
 
     connect_callbacks(window.clone(), state.clone());
@@ -85,10 +89,17 @@ pub fn setup(window: slint::Weak<AppWindow>) {
     if auto {
         let s = state.clone();
         tokio::spawn(async move {
-            // Give updater::check time to set the updating flag before we start seeding
             let delay = std::cmp::max(wait_mins as u64 * 60, 5);
+            s.log(format!("Авто-старт: ожидание {delay} сек перед запуском..."));
             tokio::time::sleep(tokio::time::Duration::from_secs(delay)).await;
-            start_seeding(s);
+            if s.updating.load(std::sync::atomic::Ordering::Acquire) {
+                s.log("Авто-старт: ожидание завершения обновления...");
+                while s.updating.load(std::sync::atomic::Ordering::Acquire) {
+                    tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+                }
+            }
+            s.log("Авто-старт: запуск...");
+            start_seeding(s, true);
         });
     }
 }
@@ -100,11 +111,14 @@ fn connect_callbacks(window: slint::Weak<AppWindow>, state: Arc<AppState>) {
 
     {
         let s = state.clone();
-        w.on_start_seed(move || start_seeding(s.clone()));
+        w.on_start_seed(move || start_seeding(s.clone(), false));
     }
     {
         let s = state.clone();
-        w.on_force_start_seed(move || do_start_seeding(s.clone()));
+        w.on_force_start_seed(move || {
+            s.seeded_after_hours.store(true, std::sync::atomic::Ordering::Release);
+            do_start_seeding(s.clone());
+        });
     }
     {
         let s = state.clone();
@@ -269,6 +283,17 @@ fn connect_callbacks(window: slint::Weak<AppWindow>, state: Arc<AppState>) {
         });
     }
     {
+        let s = state.clone();
+        w.on_confirm_after_seed_proceed(move || execute_after_seed(&s));
+    }
+    {
+        let s = state.clone();
+        w.on_confirm_after_seed_cancel(move || {
+            *s.pending_after_seed.lock().unwrap() = None;
+            let _ = s.window.upgrade_in_event_loop(|w| w.set_show_after_seed_confirm(false));
+        });
+    }
+    {
         // X-button: show confirm dialog when seeding, otherwise exit directly.
         let s = state.clone();
         w.window().on_close_requested(move || {
@@ -319,31 +344,44 @@ fn connect_callbacks(window: slint::Weak<AppWindow>, state: Arc<AppState>) {
 
 // ── Seeding control ───────────────────────────────────────────────────────────
 
-fn start_seeding(state: Arc<AppState>) {
+fn start_seeding(state: Arc<AppState>, is_auto: bool) {
     let (time_enabled, limit_h, limit_m) = {
         let cfg = state.config.lock().unwrap();
-        (
-            cfg.time_limit_enabled,
-            cfg.time_limit_hour,
-            cfg.time_limit_minute,
-        )
+        (cfg.time_limit_enabled, cfg.time_limit_hour, cfg.time_limit_minute)
     };
     if time_enabled {
         use chrono::Timelike;
         let now = chrono::Local::now();
-        if now.hour() * 60 + now.minute() >= limit_h * 60 + limit_m {
-            let _ = state
-                .window
-                .upgrade_in_event_loop(|w| w.set_show_after_hours_prompt(true));
+        let now_mins = now.hour() * 60 + now.minute();
+        let limit_mins = limit_h * 60 + limit_m;
+        state.log(format!(
+            "Проверка лимита времени: сейчас {:02}:{:02}, лимит {:02}:{:02}",
+            now.hour(), now.minute(), limit_h, limit_m
+        ));
+        if now_mins >= limit_mins {
+            state.log(format!("Лимит времени достигнут ({limit_h:02}:{limit_m:02}) — seed не запущен"));
+            let _ = state.window.upgrade_in_event_loop(move |w| {
+                w.set_after_hours_is_auto(is_auto);
+                w.set_show_after_hours_prompt(true);
+            });
             return;
         }
+    } else {
+        state.log("Лимит времени отключён — продолжаем");
     }
     do_start_seeding(state);
 }
 
 fn do_start_seeding(state: Arc<AppState>) {
     if state.updating.load(std::sync::atomic::Ordering::Acquire) {
-        state.log("Ожидание обновления — seed отложен");
+        state.log("Обновление в процессе — seed запустится после завершения");
+        let s = state;
+        tokio::spawn(async move {
+            while s.updating.load(std::sync::atomic::Ordering::Acquire) {
+                tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+            }
+            do_start_seeding(s);
+        });
         return;
     }
     let mut guard = state.seed_token.lock().unwrap();
@@ -388,6 +426,7 @@ fn do_start_seeding(state: Arc<AppState>) {
             perform_after_seed_action(&cfg, &state2);
         }
 
+        state2.seeded_after_hours.store(false, std::sync::atomic::Ordering::Release);
         *state2.seed_token.lock().unwrap() = None;
         let _ = state2.window.upgrade_in_event_loop(|w| {
             w.set_seeding_active(false);
@@ -418,19 +457,49 @@ fn stop_seeding(state: Arc<AppState>) {
 }
 
 fn perform_after_seed_action(cfg: &Config, state: &Arc<AppState>) {
-    match cfg.after_seed_action {
-        AfterSeedAction::Nothing => {}
-        AfterSeedAction::CloseAndExit => std::process::exit(0),
-        AfterSeedAction::Shutdown => {
+    if cfg.after_seed_action == AfterSeedAction::Nothing { return; }
+
+    let msg: slint::SharedString = match cfg.after_seed_action {
+        AfterSeedAction::CloseAndExit => "Закрыть игру и Выйти",
+        AfterSeedAction::Shutdown => "Завершение Работы",
+        AfterSeedAction::Sleep => "Спящий Режим",
+        AfterSeedAction::Nothing => return,
+    }.into();
+
+    *state.pending_after_seed.lock().unwrap() = Some(cfg.after_seed_action.clone());
+    let _ = state.window.upgrade_in_event_loop(move |w| {
+        w.set_after_seed_confirm_msg(msg);
+        w.set_show_after_seed_confirm(true);
+    });
+
+    // Force-started after hours → wait indefinitely, user must confirm manually.
+    // Normal/auto-start → auto-proceed after 60s for unattended sessions.
+    let after_hours = state.seeded_after_hours.load(std::sync::atomic::Ordering::Acquire);
+    if !after_hours {
+        let s = state.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
+            execute_after_seed(&s);
+        });
+    }
+}
+
+fn execute_after_seed(state: &Arc<AppState>) {
+    let action = state.pending_after_seed.lock().unwrap().take();
+    let _ = state.window.upgrade_in_event_loop(|w| w.set_show_after_seed_confirm(false));
+    match action {
+        Some(AfterSeedAction::CloseAndExit) => std::process::exit(0),
+        Some(AfterSeedAction::Shutdown) => {
             state.log("Выключение компьютера...");
             let _ = spawn_hidden(std::process::Command::new("shutdown").args(["/s", "/t", "60"]));
         }
-        AfterSeedAction::Sleep => {
+        Some(AfterSeedAction::Sleep) => {
             state.log("Спящий режим...");
             let mut cmd = std::process::Command::new("rundll32.exe");
             cmd.args(["powrprof.dll,SetSuspendState", "0,1,0"]);
             let _ = spawn_hidden(&mut cmd);
         }
+        _ => {}
     }
 }
 
@@ -570,7 +639,7 @@ async fn api_health_loop(state: Arc<AppState>) {
         } else {
             consecutive_ok = 0;
         }
-        let show_ok = consecutive_ok >= 2;
+        let show_ok = consecutive_ok >= 1;
         let _ = state
             .window
             .upgrade_in_event_loop(move |w| w.set_api_ok(show_ok));
@@ -821,7 +890,7 @@ fn apply_theme(_theme: &Theme) {
 fn after_action_str(a: &AfterSeedAction) -> &'static str {
     match a {
         AfterSeedAction::Nothing => "Ничего",
-        AfterSeedAction::CloseAndExit => "Закрыть игру и Выйти",
+        AfterSeedAction::CloseAndExit => "Закрыть игру и Выйти (Рекомендуется)",
         AfterSeedAction::Shutdown => "Завершение Работы",
         AfterSeedAction::Sleep => "Спящий Режим",
     }
@@ -829,7 +898,7 @@ fn after_action_str(a: &AfterSeedAction) -> &'static str {
 
 fn parse_after_action(s: &slint::SharedString) -> AfterSeedAction {
     match s.as_str() {
-        "Закрыть игру и Выйти" => AfterSeedAction::CloseAndExit,
+        "Закрыть игру и Выйти (Рекомендуется)" | "Закрыть игру и Выйти" => AfterSeedAction::CloseAndExit,
         "Завершение Работы" => AfterSeedAction::Shutdown,
         "Спящий Режим" => AfterSeedAction::Sleep,
         _ => AfterSeedAction::Nothing,

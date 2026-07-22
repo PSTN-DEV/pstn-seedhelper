@@ -77,13 +77,7 @@ pub async fn start_seeding(
 
     log!("Начинаем Seed серверов!");
 
-    // 1. Time limit check
-    if !check_time_limit(&config) {
-        log!("Слишком поздно — лимит времени достигнут");
-        return true;
-    }
-
-    // 2. Network wait (up to 5 min)
+    // 1. Network wait (up to 5 min)
     log!("Проверка доступности сети...");
     let mut ready = false;
     for _ in 0..20 {
@@ -105,21 +99,21 @@ pub async fn start_seeding(
         return true;
     }
 
-    // 3. Validate config
+    // 2. Validate config
     if let Err(e) = crate::game::validate_config(&config) {
         log!("Ошибка конфига: {e}");
         return true;
     }
 
-    // 4. Resolve seed order
+    // 3. Resolve seed order
     let order = resolve_seed_order(&config, &api, &log).await;
 
-    // 5. Skip launch if every online server is already seeded
+    // 4. Skip launch if every online server is already seeded
     if all_seeded(&order, config.desired_players, &api, &log).await {
         return true;
     }
 
-    // 6. Launch game
+    // 5. Launch game
     if let Err(e) = do_launch(&config, &token, &log).await {
         log!("Ошибка запуска игры: {e}");
         if config.eco_mode {
@@ -131,7 +125,7 @@ pub async fn start_seeding(
         return false;
     }
 
-    // 7. Server seed loop
+    // 6. Server seed loop
     'servers: for &server_num in &order {
         if token.is_cancelled() {
             break;
@@ -330,13 +324,3 @@ async fn seed_server(
     }
 }
 
-pub fn check_time_limit(config: &Config) -> bool {
-    if !config.time_limit_enabled {
-        return true;
-    }
-    use chrono::Timelike;
-    let moscow = chrono::Utc::now().with_timezone(&chrono_tz::Europe::Moscow);
-    let now_min = moscow.hour() * 60 + moscow.minute();
-    let limit_min = config.time_limit_hour * 60 + config.time_limit_minute;
-    now_min < limit_min
-}
