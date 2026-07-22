@@ -345,6 +345,10 @@ fn connect_callbacks(window: slint::Weak<AppWindow>, state: Arc<AppState>) {
 // ── Seeding control ───────────────────────────────────────────────────────────
 
 fn start_seeding(state: Arc<AppState>, is_auto: bool) {
+    if state.seed_token.lock().unwrap().is_some() {
+        state.log("Авто-старт: seed уже запущен — пропускаем");
+        return;
+    }
     let (time_enabled, limit_h, limit_m) = {
         let cfg = state.config.lock().unwrap();
         (cfg.time_limit_enabled, cfg.time_limit_hour, cfg.time_limit_minute)
