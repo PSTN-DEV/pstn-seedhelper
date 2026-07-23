@@ -472,6 +472,7 @@ export component AppWindow inherits Window {
     in-out property <bool>   cfg-eco-mode: false;
     in-out property <string> cfg-preferred-fps: "";       // empty = None (Squad default)
     in-out property <string> cfg-preferred-menu-fps: ""; // empty = None (Squad default)
+    in-out property <string> cfg-preferred-res: "";      // e.g. "1920×1080", auto-detected
     in-out property <string> cfg-after-action: "Ничего";
     in-out property <int>    cfg-stop-after: 0;
     in-out property <string> cfg-scheduled-shutdown: "";    // kept for Rust compat
@@ -512,6 +513,8 @@ export component AppWindow inherits Window {
     private property <bool>  show-advanced: false;
     private property <bool>  show-render-confirm: false;
     private property <bool>  show-unsaved-warning: false;
+    private property <bool>  show-wait-exit: false;
+    private property <int>   exit-wait-secs: 10;
     private property <int>   refresh-elapsed: 0;
     private property <float> refresh-fill: root.cfg-checkup-interval > 0
         ? clamp(1.0 - refresh-elapsed * 1.0 / root.cfg-checkup-interval, 0.0, 1.0)
@@ -543,6 +546,7 @@ export component AppWindow inherits Window {
     changed cfg-auto-update          => { root.settings-dirty = true; }
     changed refresh-ping             => { refresh-elapsed = 0; }
     changed log-text                 => { log-flick.viewport-y = min(0px, log-flick.height - log-flick.viewport-height); }
+    changed stop-blocked             => { if (!root.stop-blocked && root.show-wait-exit) { root.show-wait-exit = false; root.show-confirm-exit = true; } }
     animate popup-alpha { duration: 220ms; easing: ease-out; }
     private property <float> restore-toast-alpha: restore-toast-visible ? 1.0 : 0.0;
     animate restore-toast-alpha { duration: 220ms; easing: ease-out; }
@@ -576,6 +580,12 @@ export component AppWindow inherits Window {
         interval: 2500ms;
         running: root.restore-toast-visible;
         triggered => { root.restore-toast-visible = false; }
+    }
+
+    exit-wait-timer := Timer {
+        interval: 1000ms;
+        running: root.show-wait-exit && root.exit-wait-secs > 0;
+        triggered => { root.exit-wait-secs = root.exit-wait-secs - 1; }
     }
 
     VerticalLayout { spacing: 0px; padding: 0px;
@@ -644,7 +654,12 @@ export component AppWindow inherits Window {
                     clsta := TouchArea {
                         clicked => {
                             if (root.seeding-active) {
-                                if (!root.stop-blocked) { root.show-confirm-exit = true; }
+                                if (root.stop-blocked) {
+                                    root.exit-wait-secs = 10;
+                                    root.show-wait-exit = true;
+                                } else {
+                                    root.show-confirm-exit = true;
+                                }
                             } else {
                                 root.exit-app();
                             }
@@ -974,20 +989,18 @@ export component AppWindow inherits Window {
                 background: #141414; border-radius: 9px;
                 border-width: 1px; border-color: #ffffff0a; clip: true;
 
-                log-flick := Flickable {
+                log-flick := ScrollView {
                     x: 0; y: 0; width: parent.width; height: parent.height;
                     viewport-height: log-inner.preferred-height + 28px;
+                    viewport-width: parent.width;
 
-                    log-inner := TextInput {
+                    log-inner := Text {
                         x: 16px; y: 14px;
-                        width: parent.width - 32px;
+                        width: parent.width - 48px;
                         text: root.log-text;
                         font-family: "JetBrains Mono"; font-size: 12px;
                         color: #6b8faa;
-                        single-line: false;
-                        read-only: true;
-                        selection-background-color: #4a6bd430;
-                        selection-foreground-color: #b0ccee;
+                        wrap: word-wrap;
                     }
                 }
             }
@@ -1134,6 +1147,23 @@ export component AppWindow inherits Window {
                             VerticalLayout {
                                 alignment: center;
                                 Text { text: "Пусто = Squad сбрасывает сам"; color: #555555; font-size: 11px; }
+                            }
+                        }
+                    }
+                    SettingsRow { label: "Разрешение экрана:";
+                        HorizontalLayout {
+                            spacing: 12px;
+                            VerticalLayout {
+                                alignment: center;
+                                Text {
+                                    text: root.cfg-preferred-res != "" ? root.cfg-preferred-res : "Не определено";
+                                    color: root.cfg-preferred-res != "" ? #e5e5e5 : #555555;
+                                    font-family: "JetBrains Mono"; font-size: 13px; font-weight: 600;
+                                }
+                            }
+                            VerticalLayout {
+                                alignment: center;
+                                Text { text: "Определено автоматически — восстанавливается после сида"; color: #555555; font-size: 11px; }
                             }
                         }
                     }
@@ -1331,6 +1361,70 @@ export component AppWindow inherits Window {
                 text: "Настройки восстановлены";
                 color: #4a6bd4; font-size: 13px; font-weight: 600;
                 vertical-alignment: center;
+            }
+        }
+    }
+
+    // ── Wait-for-restore popup (X clicked while settings not yet restored) ────
+    if root.show-wait-exit : Rectangle {
+        x: 0; y: 0; width: parent.width; height: parent.height;
+        background: #00000099;
+
+        TouchArea { x: 0; y: 0; width: parent.width; height: parent.height; }
+
+        Rectangle {
+            x: (parent.width - 430px) / 2;
+            y: (parent.height - 200px) / 2;
+            width: 430px; height: 200px;
+            border-radius: 14px;
+            background: #252525;
+            border-width: 1px; border-color: #ffffff18;
+            drop-shadow-blur: 48px; drop-shadow-color: #000000cc;
+
+            TouchArea { x: 0; y: 0; width: parent.width; height: parent.height; }
+
+            VerticalLayout {
+                padding: 26px; spacing: 0px;
+
+                Text {
+                    text: "Восстановление настроек...";
+                    color: #e5e5e5; font-size: 15px; font-weight: 700;
+                }
+                Rectangle { height: 8px; }
+                Text {
+                    text: "Настройки игры ещё не восстановлены. Пожалуйста, подождите.";
+                    color: #6b6b6b; font-size: 13px; wrap: word-wrap;
+                }
+                Rectangle { height: 16px; }
+
+                HorizontalLayout {
+                    spacing: 0px; alignment: center;
+                    Text {
+                        text: "\{root.exit-wait-secs}";
+                        color: #4a6bd4; font-size: 36px; font-weight: 700;
+                        font-family: "JetBrains Mono";
+                        horizontal-alignment: center; vertical-alignment: center;
+                    }
+                }
+                Rectangle { height: 16px; }
+
+                HorizontalLayout {
+                    height: 38px; alignment: end;
+                    Rectangle {
+                        width: 115px; border-radius: 9px;
+                        background: wex-cancel.has-hover ? #333333 : #2c2c2c;
+                        border-width: 1px; border-color: #ffffff14;
+                        wex-cancel := TouchArea {
+                            clicked => { root.show-wait-exit = false; }
+                            mouse-cursor: pointer;
+                        }
+                        Text {
+                            text: "Отмена";
+                            color: #929292; font-size: 13.5px; font-weight: 600;
+                            horizontal-alignment: center; vertical-alignment: center;
+                        }
+                    }
+                }
             }
         }
     }

@@ -415,11 +415,15 @@ fn do_start_seeding(state: Arc<AppState>) {
         w.set_seeding_active(true);
         w.set_stop_blocked(true);
     });
-    let win_unblock = state.window.clone();
-    tokio::spawn(async move {
-        tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
-        let _ = win_unblock.upgrade_in_event_loop(|w| w.set_stop_blocked(false));
-    });
+    // Eco mode (windowed 1x1): stop_blocked is cleared by \x00restore_toast when INI is restored.
+    // Non-eco or render_toggle: nothing to restore, unblock after 10s.
+    if !cfg.eco_mode || cfg.render_toggle {
+        let win_unblock = state.window.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
+            let _ = win_unblock.upgrade_in_event_loop(|w| w.set_stop_blocked(false));
+        });
+    }
 
     let state2 = state.clone();
     tokio::spawn(async move {
@@ -445,15 +449,6 @@ fn stop_seeding(state: Arc<AppState>) {
         token.cancel();
     }
     crate::process::kill_squad();
-    let (eco, preferred_fps, preferred_menu_fps) = {
-        let cfg = state.config.lock().unwrap();
-        (cfg.eco_mode, cfg.preferred_fps, cfg.preferred_menu_fps)
-    };
-    if eco {
-        if crate::game::write_fps_keys(preferred_fps, preferred_menu_fps).is_ok() {
-            let _ = state.log.send("\x00restore_toast".into());
-        }
-    }
     let _ = state.window.upgrade_in_event_loop(|w| {
         w.set_seeding_active(false);
         w.set_stop_blocked(false);
@@ -513,7 +508,10 @@ async fn log_consumer(mut rx: mpsc::UnboundedReceiver<String>, window: slint::We
     while let Some(raw) = rx.recv().await {
         if raw.starts_with('\x00') {
             if raw == "\x00restore_toast" {
-                let _ = window.upgrade_in_event_loop(|w| w.set_restore_toast_visible(true));
+                let _ = window.upgrade_in_event_loop(|w| {
+                    w.set_restore_toast_visible(true);
+                    w.set_stop_blocked(false);
+                });
             }
             continue;
         }
@@ -729,6 +727,13 @@ fn sync_config_to_ui(w: &AppWindow, cfg: &Config) {
             .map(|n| n.to_string())
             .unwrap_or_default()
             .into(),
+    );
+    w.set_cfg_preferred_res(
+        match (cfg.preferred_res_x, cfg.preferred_res_y) {
+            (Some(x), Some(y)) => format!("{x}×{y}"),
+            _ => String::new(),
+        }
+        .into(),
     );
     w.set_cfg_steam_id(cfg.steam_id.clone().into());
     w.set_cfg_seed_order_override(

@@ -42,16 +42,25 @@ jobs:
       - name: Build
         run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Extract version
+      - name: Extract version and changelog
         id: version
         shell: pwsh
         run: |
           $v = "${{ github.ref_name }}" -replace '^v', ''
           echo "VERSION=$v" >> $env:GITHUB_OUTPUT
-          if ($v -match "-beta") {
-            echo "IS_PRERELEASE=true" >> $env:GITHUB_OUTPUT
+
+          $lines = Get-Content CHANGELOG.md
+          $start = ($lines | Select-String "^## \[$v\]").LineNumber
+          if ($start) {
+            $rest = $lines[($start)..($lines.Count - 1)]
+            $end = ($rest | Select-String "^## \[").LineNumber | Select-Object -First 1
+            $body = if ($end) { $rest[0..($end - 2)] } else { $rest }
+            $out = ($body | Where-Object { $_ -ne $null }) -join "`n"
+            echo "BODY<<EOF" >> $env:GITHUB_OUTPUT
+            echo $out >> $env:GITHUB_OUTPUT
+            echo "EOF" >> $env:GITHUB_OUTPUT
           } else {
-            echo "IS_PRERELEASE=false" >> $env:GITHUB_OUTPUT
+            echo "BODY=No changelog entry for $v." >> $env:GITHUB_OUTPUT
           }
 
       - name: Install Inno Setup
@@ -69,15 +78,15 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: Output/pstn-seedhelper-${{ steps.version.outputs.VERSION }}-setup-${{ matrix.arch }}.exe
-          generate_release_notes: true
-          prerelease: ${{ steps.version.outputs.IS_PRERELEASE == 'true' }}
+          body: ${{ steps.version.outputs.BODY }}
+          prerelease: false
 
-  archive:
+  cleanup:
     runs-on: ubuntu-latest
     needs: release
 
     steps:
-      - name: Archive old releases
+      - name: Delete old releases
         uses: actions/github-script@v7
         with:
           script: |
@@ -86,24 +95,31 @@ jobs:
               repo: context.repo.repo,
             });
 
-            const published = releases
-              .filter(r => !r.draft)
-              .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+            const published = releases.filter(r => !r.draft);
+            const toDelete = [];
 
-            const stable     = published.filter(r => !r.prerelease);
-            const prerelease = published.filter(r =>  r.prerelease);
+            // Stable: keep only highest patch per minor (e.g. 4.3.1 survives, 4.3.0 dies)
+            const stable = published.filter(r => !r.prerelease);
+            const byMinor = {};
+            for (const r of stable) {
+              const m = r.tag_name.match(/^v?(\d+)\.(\d+)\.(\d+)/);
+              if (!m) continue;
+              const key = `${m[1]}.${m[2]}`;
+              (byMinor[key] = byMinor[key] || []).push({ r, patch: parseInt(m[3]) });
+            }
+            for (const entries of Object.values(byMinor)) {
+              entries.sort((a, b) => b.patch - a.patch);
+              toDelete.push(...entries.slice(1).map(e => e.r));
+            }
 
-            const toArchive = [
-              ...stable.slice(3),
-              ...prerelease.slice(3),
-            ];
+            // Delete all prereleases
+            toDelete.push(...published.filter(r => r.prerelease));
 
-            for (const release of toArchive) {
-              await github.rest.repos.updateRelease({
+            for (const release of toDelete) {
+              await github.rest.repos.deleteRelease({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 release_id: release.id,
-                draft: true,
               });
-              core.info(`Archived: ${release.tag_name}`);
+              core.info(`Deleted: ${release.tag_name}`);
             }

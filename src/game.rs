@@ -101,6 +101,94 @@ pub fn write_fps_keys(fps: Option<u32>, menu_fps: Option<u32>) -> Result<()> {
     Ok(())
 }
 
+/// Write or remove the four resolution keys.
+/// `None` removes the key; `Some(n)` writes the integer value.
+pub fn write_resolution_keys(res_x: Option<u32>, res_y: Option<u32>) -> Result<()> {
+    let path = settings_path();
+    if !path.exists() {
+        return Ok(());
+    }
+    let content = std::fs::read_to_string(&path).context("Чтение INI")?;
+    let content = content.trim_start_matches('\u{feff}');
+
+    const TARGET_SECTION: &str = "[/Script/Squad.SQGameUserSettings]";
+    // Integer keys: written as plain integers
+    let int_keys: [(&str, Option<u32>); 8] = [
+        ("ResolutionSizeX", res_x),
+        ("ResolutionSizeY", res_y),
+        ("LastUserConfirmedResolutionSizeX", res_x),
+        ("LastUserConfirmedResolutionSizeY", res_y),
+        ("DesiredScreenWidth", res_x),
+        ("DesiredScreenHeight", res_y),
+        ("LastUserConfirmedDesiredScreenWidth", res_x),
+        ("LastUserConfirmedDesiredScreenHeight", res_y),
+    ];
+    // Float keys: always reset to -1.000000 (Squad's "no recommendation" sentinel)
+    const FLOAT_KEYS: [&str; 2] = ["LastRecommendedScreenWidth", "LastRecommendedScreenHeight"];
+    const RESET_FLOAT: &str = "-1.000000";
+
+    let mut out = Vec::<String>::new();
+    let mut in_section = false;
+    let mut found_int = std::collections::HashSet::new();
+    let mut found_float = std::collections::HashSet::new();
+    let mut section_end_idx: Option<usize> = None;
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed == TARGET_SECTION {
+            in_section = true;
+            out.push(line.to_owned());
+            continue;
+        }
+        if in_section && trimmed.starts_with('[') && trimmed != TARGET_SECTION {
+            in_section = false;
+            section_end_idx = Some(out.len());
+        }
+        if in_section {
+            if let Some(&(key, val)) = int_keys
+                .iter()
+                .find(|(k, _)| trimmed.starts_with(&format!("{k}=")))
+            {
+                if let Some(n) = val {
+                    out.push(format!("{key}={n}"));
+                    found_int.insert(key);
+                }
+                continue;
+            }
+            if let Some(&key) = FLOAT_KEYS
+                .iter()
+                .find(|&&k| trimmed.starts_with(&format!("{k}=")))
+            {
+                out.push(format!("{key}={RESET_FLOAT}"));
+                found_float.insert(key);
+                continue;
+            }
+        }
+        out.push(line.to_owned());
+    }
+
+    if in_section {
+        section_end_idx = Some(out.len());
+    }
+
+    if let Some(idx) = section_end_idx {
+        let mut missing: Vec<String> = int_keys
+            .iter()
+            .filter(|(k, v)| v.is_some() && !found_int.contains(k))
+            .map(|(k, v)| format!("{k}={}", v.unwrap()))
+            .collect();
+        for key in FLOAT_KEYS.iter().filter(|&&k| !found_float.contains(k)) {
+            missing.push(format!("{key}={RESET_FLOAT}"));
+        }
+        for (i, line) in missing.into_iter().enumerate() {
+            out.insert(idx + i, line);
+        }
+    }
+
+    std::fs::write(&path, out.join("\n")).context("Запись INI")?;
+    Ok(())
+}
+
 // ── Squad install dir detection ───────────────────────────────────────────────
 
 /// Find Squad install dir via Steam registry → libraryfolders.vdf.
@@ -230,24 +318,30 @@ pub async fn launch_game_eco(
     let launcher = find_squad_launcher()
         .context("squad_launcher.exe не найден — укажите путь в настройках")?;
 
-    write_fps_keys(Some(6), Some(100))?;
+    if !cfg.render_toggle {
+        write_fps_keys(Some(6), Some(100))?;
+    }
     std::process::Command::new(&launcher)
         .args(&args)
         .spawn()
         .context("Ошибка запуска Squad")?;
 
-    let _ = log.send("Ждём 10 секунд — игра читает настройки...".into());
-    tokio::select! {
-        _ = sleep(Duration::from_secs(10)) => {}
-        _ = token.cancelled() => {
-            let _ = write_fps_keys(cfg.preferred_fps, cfg.preferred_menu_fps);
-            let _ = log.send("\x00restore_toast".into());
-            return Ok(());
+    if !cfg.render_toggle {
+        let _ = log.send("Ждём 10 секунд — игра читает настройки...".into());
+        tokio::select! {
+            _ = sleep(Duration::from_secs(10)) => {}
+            _ = token.cancelled() => {
+                let _ = write_fps_keys(cfg.preferred_fps, cfg.preferred_menu_fps);
+                let _ = write_resolution_keys(cfg.preferred_res_x, cfg.preferred_res_y);
+                let _ = log.send("\x00restore_toast".into());
+                return Ok(());
+            }
         }
-    }
 
-    write_fps_keys(cfg.preferred_fps, cfg.preferred_menu_fps)?;
-    let _ = log.send("\x00restore_toast".into());
+        write_fps_keys(cfg.preferred_fps, cfg.preferred_menu_fps)?;
+        write_resolution_keys(cfg.preferred_res_x, cfg.preferred_res_y)?;
+        let _ = log.send("\x00restore_toast".into());
+    }
 
     let delay_secs = (cfg.game_launch_delay as u64)
         .saturating_mul(60)
@@ -263,19 +357,25 @@ pub async fn launch_game_eco(
     Ok(())
 }
 
-/// Non-eco: launch Squad via Steam browser protocol with optional -nosound.
+/// Non-eco: launch Squad via Steam browser protocol, or via squad_launcher when -nosound is needed.
 pub async fn launch_game_steam(
     cfg: &Config,
     token: &CancellationToken,
     log: &LogSender,
 ) -> Result<()> {
-    let mut args: Vec<&str> = Vec::new();
     if cfg.disable_sound {
-        args.push("-nosound");
+        // Steam URL with launch args triggers a confirmation dialog; use launcher directly instead.
+        let launcher = find_squad_launcher()
+            .context("squad_launcher.exe не найден — укажите путь в настройках")?;
+        std::process::Command::new(&launcher)
+            .arg("-nosound")
+            .spawn()
+            .context("Ошибка запуска Squad")?;
+        let _ = log.send("Squad запущен с -nosound".into());
+    } else {
+        open_steam_url(&steam_url(&[]))?;
+        let _ = log.send("Squad запущен через Steam".into());
     }
-
-    open_steam_url(&steam_url(&args))?;
-    let _ = log.send("Squad запущен через Steam".into());
 
     let delay_secs = cfg.game_launch_delay as u64 * 60;
     if delay_secs > 0 {

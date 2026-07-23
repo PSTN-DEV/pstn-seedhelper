@@ -53,6 +53,8 @@ pub struct Config {
     pub time_limit_enabled: bool,
     pub preferred_fps: Option<u32>,
     pub preferred_menu_fps: Option<u32>,
+    pub preferred_res_x: Option<u32>,
+    pub preferred_res_y: Option<u32>,
     pub render_toggle: bool,
     pub auto_create_squad: bool,
     pub disable_sound: bool,
@@ -86,6 +88,8 @@ impl Default for Config {
             stop_after_server: 0,
             preferred_fps: None,
             preferred_menu_fps: None,
+            preferred_res_x: None,
+            preferred_res_y: None,
             render_toggle: false,
             auto_create_squad: false,
             disable_sound: true,
@@ -215,8 +219,19 @@ pub fn load() -> Config {
         }
     };
 
-    if cfg.config_version < CONFIG_VERSION {
+    let mut dirty = cfg.config_version < CONFIG_VERSION;
+    if dirty {
         cfg.config_version = CONFIG_VERSION;
+    }
+
+    if cfg.preferred_res_x.is_none() || cfg.preferred_res_y.is_none() {
+        let (w, h) = crate::platform::primary_monitor_resolution();
+        cfg.preferred_res_x = Some(w);
+        cfg.preferred_res_y = Some(h);
+        dirty = true;
+    }
+
+    if dirty {
         save(&cfg);
     }
 

@@ -122,6 +122,7 @@ pub async fn start_seeding(
         return !token.is_cancelled();
     }
     if token.is_cancelled() {
+        log!("Seed остановлен.");
         return false;
     }
 
@@ -221,6 +222,11 @@ async fn seed_server(
             return SeedResult::Failed;
         }
     };
+
+    if !status.is_online() {
+        log!("Сервер {server_num} офлайн — пропускаем");
+        return SeedResult::Success;
+    }
 
     if status.players >= config.desired_players {
         log!("Сервер {server_num} уже полон ({} игроков)", status.players);
