@@ -24,6 +24,7 @@ pub struct AppState {
     pub log: LogSender,
     pub updating: std::sync::atomic::AtomicBool,
     pub seeded_after_hours: std::sync::atomic::AtomicBool,
+    pub seeding_server: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl AppState {
@@ -57,6 +58,7 @@ pub fn setup(window: slint::Weak<AppWindow>) {
         log: log_tx,
         updating: std::sync::atomic::AtomicBool::new(false),
         seeded_after_hours: std::sync::atomic::AtomicBool::new(false),
+        seeding_server: Arc::new(std::sync::atomic::AtomicBool::new(false)),
     });
 
     connect_callbacks(window.clone(), state.clone());
@@ -410,6 +412,7 @@ fn do_start_seeding(state: Arc<AppState>) {
     let api = state.api.clone();
     let log = state.log.clone();
     let win = state.window.clone();
+    let seeding_server = state.seeding_server.clone();
 
     let _ = win.upgrade_in_event_loop(|w| {
         w.set_seeding_active(true);
@@ -427,7 +430,7 @@ fn do_start_seeding(state: Arc<AppState>) {
 
     let state2 = state.clone();
     tokio::spawn(async move {
-        let completed = crate::seeder::start_seeding(cfg.clone(), api, token, log.clone()).await;
+        let completed = crate::seeder::start_seeding(cfg.clone(), api, token, log.clone(), seeding_server).await;
 
         // Only fire after-seed action on natural completion, not on manual stop.
         if completed {

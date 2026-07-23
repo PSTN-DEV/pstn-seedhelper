@@ -70,6 +70,7 @@ pub async fn start_seeding(
     api: Arc<HubApi>,
     token: CancellationToken,
     log: LogSender,
+    seeding_server: Arc<std::sync::atomic::AtomicBool>,
 ) -> bool {
     macro_rules! log {
         ($($arg:tt)*) => {{ let _ = log.send(format!($($arg)*)); }};
@@ -137,7 +138,7 @@ pub async fn start_seeding(
                 break 'servers;
             }
 
-            match seed_server(server_num, &config, &api, &token, &log).await {
+            match seed_server(server_num, &config, &api, &token, &log, &seeding_server).await {
                 SeedResult::Cancelled => break 'servers,
                 SeedResult::Restart => {
                     log!("Перезапуск игры для сервера {server_num}...");
@@ -197,12 +198,20 @@ async fn resolve_seed_order(config: &Config, api: &HubApi, log: &LogSender) -> V
     }
 }
 
+struct ActiveServerGuard<'a>(&'a std::sync::atomic::AtomicBool);
+impl Drop for ActiveServerGuard<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, std::sync::atomic::Ordering::Release);
+    }
+}
+
 async fn seed_server(
     server_num: u8,
     config: &Config,
     api: &HubApi,
     token: &CancellationToken,
     log: &LogSender,
+    seeding_server: &std::sync::atomic::AtomicBool,
 ) -> SeedResult {
     macro_rules! log {
         ($($arg:tt)*) => {{ let _ = log.send(format!($($arg)*)); }};
@@ -283,6 +292,10 @@ async fn seed_server(
         log!("Не удалось подтвердить подключение к серверу {server_num}");
         return SeedResult::Failed;
     }
+
+    // Mark as actively seeding this server; cleared automatically on return.
+    seeding_server.store(true, std::sync::atomic::Ordering::Release);
+    let _guard = ActiveServerGuard(seeding_server);
 
     // Auto-create squad: only when game window is interactive.
     // Skipped in eco+nullrhi (render_toggle=true) since there is no visible window.

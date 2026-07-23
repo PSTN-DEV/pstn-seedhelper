@@ -8,7 +8,7 @@ pub async fn check(state: &Arc<AppState>) {
     match state.api.get_latest_version().await {
         Ok(remote) if is_newer(&remote, CURRENT_VERSION) => {
             let auto = state.config.lock().unwrap().auto_update;
-            if auto {
+            if auto && !state.seeding_server.load(std::sync::atomic::Ordering::Acquire) {
                 state
                     .updating
                     .store(true, std::sync::atomic::Ordering::Release);
