@@ -39,9 +39,6 @@ jobs:
             target
           key: ${{ runner.os }}-${{ matrix.arch }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
-      - name: Build
-        run: cargo build --release --target ${{ matrix.target }}
-
       - name: Verify Cargo.toml version matches tag
         shell: pwsh
         run: |
@@ -51,6 +48,9 @@ jobs:
             Write-Error "Version mismatch: Cargo.toml has '$cargo' but tag is 'v$tag'"
             exit 1
           }
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
 
       - name: Extract version and changelog
         id: version

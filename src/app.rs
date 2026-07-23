@@ -452,6 +452,13 @@ fn stop_seeding(state: Arc<AppState>) {
         token.cancel();
     }
     crate::process::kill_squad();
+    // Synchronous restore after kill: stop_and_exit calls std::process::exit right
+    // after this, and Squad rewrites resolution keys on every map change while alive.
+    let cfg = state.config.lock().unwrap().clone();
+    if cfg.eco_mode {
+        crate::game::restore_ini_keys(&cfg);
+        state.log("Настройки FPS/разрешения восстановлены");
+    }
     let _ = state.window.upgrade_in_event_loop(|w| {
         w.set_seeding_active(false);
         w.set_stop_blocked(false);

@@ -189,6 +189,13 @@ pub fn write_resolution_keys(res_x: Option<u32>, res_y: Option<u32>) -> Result<(
     Ok(())
 }
 
+/// Restore preferred FPS + resolution keys. Squad rewrites these on every map
+/// change / server join, so this must run after the game process is killed.
+pub fn restore_ini_keys(cfg: &Config) {
+    let _ = write_fps_keys(cfg.preferred_fps, cfg.preferred_menu_fps);
+    let _ = write_resolution_keys(cfg.preferred_res_x, cfg.preferred_res_y);
+}
+
 // ── Squad install dir detection ───────────────────────────────────────────────
 
 /// Find Squad install dir via Steam registry → libraryfolders.vdf.

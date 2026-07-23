@@ -118,7 +118,7 @@ pub async fn start_seeding(
     if let Err(e) = do_launch(&config, &token, &log).await {
         log!("Ошибка запуска игры: {e}");
         if config.eco_mode {
-            let _ = crate::game::write_fps_keys(config.preferred_fps, config.preferred_menu_fps);
+            crate::game::restore_ini_keys(&config);
         }
         return !token.is_cancelled();
     }
@@ -164,16 +164,18 @@ pub async fn start_seeding(
         }
     }
 
-    // 7. Cleanup
-    if config.eco_mode {
-        let _ = crate::game::write_fps_keys(config.preferred_fps, config.preferred_menu_fps);
-    }
-
+    // 7. Cleanup — kill first: Squad rewrites resolution/fps keys on every map
+    // change, so the INI restore only sticks once the process is dead.
     if !token.is_cancelled() {
         log!("Все сервера обработаны!");
         crate::process::kill_squad();
+        if config.eco_mode {
+            crate::game::restore_ini_keys(&config);
+            log!("Настройки FPS/разрешения восстановлены");
+        }
         true
     } else {
+        // Cancelled: stop_seeding() kills Squad and restores the INI itself.
         log!("Seed остановлен.");
         false
     }

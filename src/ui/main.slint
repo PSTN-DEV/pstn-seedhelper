@@ -1063,7 +1063,7 @@ export component AppWindow inherits Window {
                 SettingsRow { label: "Остановиться после:";
                     ComboBox {
                         width: 280px; height: 34px;
-                        model: ["Не останавливаться", "PSTN #1 Первый Сервер", "PSTN #2 [RU] ВТОРЖЕНИЕ | ИНВАГА | pstnsquad.ru", "PSTN #3 ВС РФ vs ВСУ 24/7", "PSTN #4 Все режимы"];
+                        model: ["Не останавливаться", "PSTN #1", "PSTN #2", "PSTN #3", "PSTN #4"];
                         current-index <=> root.cfg-stop-after;
                     }
                 }
