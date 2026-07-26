@@ -4,7 +4,7 @@ use std::sync::Arc;
 const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Called once on startup. Auto-applies if enabled, otherwise sets the UI update notice.
-pub async fn check(state: &Arc<AppState>) {
+pub async fn check(state: Arc<AppState>) {
     match state.api.get_latest_version().await {
         Ok(remote) if is_newer(&remote, CURRENT_VERSION) => {
             let auto = state.config.lock().unwrap().auto_update;
@@ -13,7 +13,7 @@ pub async fn check(state: &Arc<AppState>) {
                     .updating
                     .store(true, std::sync::atomic::Ordering::Release);
                 let _ = state.log.send(format!("Авто-обновление до {remote}..."));
-                apply(state, true).await;
+                apply(&state, true).await;
                 return;
             }
             let notice = format!("Доступно обновление {remote}  (текущая v{CURRENT_VERSION})");

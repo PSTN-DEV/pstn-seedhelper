@@ -1,4 +1,5 @@
 use anyhow::Result;
+use chrono::Timelike;
 use std::sync::Arc;
 use tokio::time::{sleep, Duration};
 use tokio_util::sync::CancellationToken;
@@ -11,6 +12,14 @@ pub enum SeedResult {
     Success,
     Restart,
     Failed,
+    Cancelled,
+    NightMode,
+    PeriodEnd,
+}
+
+pub enum SeedOutcome {
+    Completed,
+    NightCompleted,
     Cancelled,
 }
 
@@ -31,6 +40,10 @@ async fn do_launch(
 ) -> anyhow::Result<()> {
     if crate::process::is_squad_client_running() {
         let _ = log.send("Squad уже запущен — пропускаем запуск".into());
+        // INI was never touched, so unblock stop immediately in eco mode.
+        if config.eco_mode && !config.render_toggle {
+            let _ = log.send("\x00restore_toast".into());
+        }
         return Ok(());
     }
     if config.delete_startup_video {
@@ -63,15 +76,14 @@ async fn all_seeded(order: &[u8], threshold: u32, api: &HubApi, log: &LogSender)
     true
 }
 
-/// Returns true = completed naturally (after-seed action should fire),
-///         false = cancelled by Stop button (skip after-seed action).
 pub async fn start_seeding(
     config: Config,
     api: Arc<HubApi>,
     token: CancellationToken,
     log: LogSender,
     seeding_server: Arc<std::sync::atomic::AtomicBool>,
-) -> bool {
+    crash_restart: Arc<std::sync::atomic::AtomicBool>,
+) -> SeedOutcome {
     macro_rules! log {
         ($($arg:tt)*) => {{ let _ = log.send(format!($($arg)*)); }};
     }
@@ -83,7 +95,7 @@ pub async fn start_seeding(
     let mut ready = false;
     for _ in 0..20 {
         if token.is_cancelled() {
-            return false;
+            return SeedOutcome::Cancelled;
         }
         if api.ping().await {
             log!("Сеть доступна!");
@@ -92,26 +104,38 @@ pub async fn start_seeding(
         }
         log!("Сеть недоступна, повтор через 15 сек...");
         if isleep(15, &token).await.is_err() {
-            return false;
+            return SeedOutcome::Cancelled;
         }
     }
     if !ready {
         log!("Сеть недоступна после 5 минут — seed отменён");
-        return true;
+        return SeedOutcome::Completed;
     }
 
     // 2. Validate config
     if let Err(e) = crate::game::validate_config(&config) {
         log!("Ошибка конфига: {e}");
-        return true;
+        return SeedOutcome::Completed;
+    }
+
+    // 2a. Jump straight to night mode if window is already open
+    if config.night_mode_enabled && is_in_night_window(
+        config.night_start_hour, config.night_start_minute,
+        config.night_end_hour, config.night_end_minute,
+    ) {
+        let _ = log.send("\x00night_mode_on".into());
+        log!("Ночной период — запускаем ночной режим");
+        let done = start_night_seeding(config, api, token, log.clone(), seeding_server).await;
+        let _ = log.send("\x00night_mode_off".into());
+        return if done { SeedOutcome::NightCompleted } else { SeedOutcome::Cancelled };
     }
 
     // 3. Resolve seed order
-    let order = resolve_seed_order(&config, &api, &log).await;
+    let order = resolve_seed_order(&api, &log).await;
 
     // 4. Skip launch if every online server is already seeded
     if all_seeded(&order, config.desired_players, &api, &log).await {
-        return true;
+        return SeedOutcome::Completed;
     }
 
     // 5. Launch game
@@ -120,11 +144,11 @@ pub async fn start_seeding(
         if config.eco_mode {
             crate::game::restore_ini_keys(&config);
         }
-        return !token.is_cancelled();
+        return if token.is_cancelled() { SeedOutcome::Cancelled } else { SeedOutcome::Completed };
     }
     if token.is_cancelled() {
         log!("Seed остановлен.");
-        return false;
+        return SeedOutcome::Cancelled;
     }
 
     // 6. Server seed loop
@@ -133,18 +157,53 @@ pub async fn start_seeding(
             break;
         }
 
+        // Transition to night mode if window opened between servers
+        if config.night_mode_enabled && is_in_night_window(
+            config.night_start_hour, config.night_start_minute,
+            config.night_end_hour, config.night_end_minute,
+        ) {
+            let _ = log.send("\x00night_mode_on".into());
+            log!("Ночной период — переключаемся на ночной режим");
+            let done = start_night_seeding(config.clone(), api.clone(), token.clone(), log.clone(), seeding_server.clone()).await;
+            let _ = log.send("\x00night_mode_off".into());
+            if !token.is_cancelled() {
+                crate::process::kill_squad();
+                if config.eco_mode { crate::game::restore_ini_keys(&config); }
+            }
+            return if done { SeedOutcome::NightCompleted } else { SeedOutcome::Cancelled };
+        }
+
         loop {
             if token.is_cancelled() {
                 break 'servers;
             }
 
             match seed_server(server_num, &config, &api, &token, &log, &seeding_server).await {
+                SeedResult::NightMode => {
+                    let _ = log.send("\x00night_mode_on".into());
+                    log!("Ночной период — переключаемся на ночной режим");
+                    let done = start_night_seeding(config.clone(), api.clone(), token.clone(), log.clone(), seeding_server.clone()).await;
+                    let _ = log.send("\x00night_mode_off".into());
+                    if !token.is_cancelled() {
+                        crate::process::kill_squad();
+                        if config.eco_mode { crate::game::restore_ini_keys(&config); }
+                    }
+                    return if done { SeedOutcome::NightCompleted } else { SeedOutcome::Cancelled };
+                }
+                SeedResult::PeriodEnd => {
+                    log!("Период сидинга завершён — seed остановлен");
+                    break 'servers;
+                }
                 SeedResult::Cancelled => break 'servers,
                 SeedResult::Restart => {
                     log!("Перезапуск игры для сервера {server_num}...");
                     if let Err(e) = do_launch(&config, &token, &log).await {
                         log!("Ошибка перезапуска: {e}");
                         break 'servers;
+                    }
+                    if crash_restart.swap(false, std::sync::atomic::Ordering::AcqRel) {
+                        log!("Игра перезапущена после краша — пропускаем переподключение");
+                        break;
                     }
                     continue;
                 }
@@ -173,19 +232,232 @@ pub async fn start_seeding(
             crate::game::restore_ini_keys(&config);
             log!("Настройки FPS/разрешения восстановлены");
         }
-        true
+        SeedOutcome::Completed
     } else {
         // Cancelled: stop_seeding() kills Squad and restores the INI itself.
         log!("Seed остановлен.");
-        false
+        SeedOutcome::Cancelled
     }
 }
 
-async fn resolve_seed_order(config: &Config, api: &HubApi, log: &LogSender) -> Vec<u8> {
-    if let Some(ref local) = config.seed_order_override {
-        let _ = log.send(format!("Используем локальный порядок: {local:?}"));
-        return local.clone();
+/// Returns true if current Moscow time (UTC+3) is inside [start, end).
+/// Handles cross-midnight windows, e.g. 23:00 → 05:00.
+pub fn is_in_night_window(start_h: u32, start_m: u32, end_h: u32, end_m: u32) -> bool {
+    let now = chrono::Local::now();
+    let now_mins = now.hour() * 60 + now.minute();
+    let start_mins = start_h * 60 + start_m;
+    let end_mins = end_h * 60 + end_m;
+    if start_mins > end_mins {
+        now_mins >= start_mins || now_mins < end_mins
+    } else {
+        now_mins >= start_mins && now_mins < end_mins
     }
+}
+
+/// Night-mode seeding: find servers with 50–90 players, join the fullest one.
+/// Runs until the night window ends (returns true) or the token is cancelled (returns false).
+pub async fn start_night_seeding(
+    config: Config,
+    api: Arc<HubApi>,
+    token: CancellationToken,
+    log: LogSender,
+    seeding_server: Arc<std::sync::atomic::AtomicBool>,
+) -> bool {
+    macro_rules! log {
+        ($($arg:tt)*) => {{ let _ = log.send(format!($($arg)*)); }};
+    }
+
+    const NIGHT_MIN: u32 = 50;
+    const NIGHT_MAX: u32 = 90;
+
+    log!("Ночной режим: поиск серверов {NIGHT_MIN}–{NIGHT_MAX} игроков (МСК)");
+
+    let mut current_server: Option<u8> = None;
+
+    loop {
+        if token.is_cancelled() {
+            seeding_server.store(false, std::sync::atomic::Ordering::Release);
+            return false;
+        }
+
+        if !is_in_night_window(
+            config.night_start_hour, config.night_start_minute,
+            config.night_end_hour, config.night_end_minute,
+        ) {
+            log!("Ночной режим: период завершён");
+            crate::process::kill_squad();
+            seeding_server.store(false, std::sync::atomic::Ordering::Release);
+            return true;
+        }
+
+        let servers = match api.get_all_servers().await {
+            Ok(s) => s,
+            Err(e) => {
+                log!("Ночной режим: ошибка API — {e}");
+                if isleep(60, &token).await.is_err() {
+                    seeding_server.store(false, std::sync::atomic::Ordering::Release);
+                    return false;
+                }
+                continue;
+            }
+        };
+
+        // Pick online server in [NIGHT_MIN, NIGHT_MAX) with most players
+        let best = (1u8..=4)
+            .filter_map(|num| {
+                let tag = crate::api::tag_for(num)?;
+                let s = servers.get(tag)?;
+                if s.is_online() && s.players >= NIGHT_MIN && s.players < NIGHT_MAX {
+                    Some((num, s.players))
+                } else {
+                    None
+                }
+            })
+            .max_by_key(|(_, p)| *p)
+            .map(|(num, _)| num);
+
+        let target = match best {
+            None => {
+                log!("Ночной режим: нет серверов в диапазоне {NIGHT_MIN}–{NIGHT_MAX} — режим ожидания");
+                // Store false BEFORE killing squad so process_watch_loop doesn't mistake
+                // this intentional kill for a crash.
+                seeding_server.store(false, std::sync::atomic::Ordering::Release);
+                if crate::process::is_squad_client_running() {
+                    crate::process::kill_squad();
+                }
+                // Unblock stop button in eco mode regardless of whether squad was
+                // running — if night mode entered stand-by before ever launching,
+                // \x00restore_toast was never sent by launch_game_eco.
+                if config.eco_mode {
+                    let _ = log.send("\x00restore_toast".into());
+                }
+                current_server = None;
+                if isleep(config.checkup_interval, &token).await.is_err() {
+                    return false;
+                }
+                continue;
+            }
+            Some(t) => t,
+        };
+
+        if current_server != Some(target) {
+            // First join or server switch — launch game if not running
+            if !crate::process::is_squad_client_running() {
+                if let Err(e) = do_launch(&config, &token, &log).await {
+                    log!("Ночной режим: ошибка запуска — {e}");
+                    seeding_server.store(false, std::sync::atomic::Ordering::Release);
+                    return !token.is_cancelled();
+                }
+                if token.is_cancelled() {
+                    seeding_server.store(false, std::sync::atomic::Ordering::Release);
+                    return false;
+                }
+            }
+
+            log!("Ночной режим: подключаемся к серверу {target}...");
+            let url = match api.join_server(target).await {
+                Ok(u) => u,
+                Err(e) => {
+                    log!("Ночной режим: ошибка URL — {e}");
+                    if isleep(60, &token).await.is_err() {
+                        seeding_server.store(false, std::sync::atomic::Ordering::Release);
+                        return false;
+                    }
+                    continue;
+                }
+            };
+            if let Err(e) = crate::game::open_steam_url(&url) {
+                log!("Ночной режим: ошибка открытия URL — {e}");
+                if isleep(60, &token).await.is_err() {
+                    seeding_server.store(false, std::sync::atomic::Ordering::Release);
+                    return false;
+                }
+                continue;
+            }
+
+            if isleep(120, &token).await.is_err() {
+                seeding_server.store(false, std::sync::atomic::Ordering::Release);
+                return false;
+            }
+
+            // Keep retrying join while server still has room. Stops when:
+            // - connected, or
+            // - server hit NIGHT_MAX (pointless to join), or
+            // - cancelled.
+            let mut connected = false;
+            loop {
+                if token.is_cancelled() {
+                    seeding_server.store(false, std::sync::atomic::Ordering::Release);
+                    return false;
+                }
+
+                // Check player count before every attempt.
+                match api.get_server(target).await {
+                    Ok(s) if s.players >= NIGHT_MAX => {
+                        log!("Ночной режим: сервер {target} достиг {NIGHT_MAX} игроков — отмена подключения");
+                        break;
+                    }
+                    Err(e) => log!("Ночной режим: ошибка статуса — {e}"),
+                    _ => {}
+                }
+
+                match api.check_player(&config.steam_id, target).await {
+                    Ok(true) => { connected = true; break; }
+                    Ok(false) => {
+                        log!("Ночной режим: подключение не подтверждено — повтор через 2 мин");
+                        if let Ok(u) = api.join_server(target).await {
+                            let _ = crate::game::open_steam_url(&u);
+                        }
+                        if isleep(120, &token).await.is_err() {
+                            seeding_server.store(false, std::sync::atomic::Ordering::Release);
+                            return false;
+                        }
+                    }
+                    Err(e) => {
+                        log!("Ночной режим: ошибка проверки — {e}");
+                        if isleep(30, &token).await.is_err() {
+                            seeding_server.store(false, std::sync::atomic::Ordering::Release);
+                            return false;
+                        }
+                    }
+                }
+            }
+
+            if !connected {
+                log!("Ночной режим: не удалось подключиться к серверу {target}");
+                current_server = None;
+                seeding_server.store(false, std::sync::atomic::Ordering::Release);
+                if isleep(60, &token).await.is_err() { return false; }
+                continue;
+            }
+
+            current_server = Some(target);
+            seeding_server.store(true, std::sync::atomic::Ordering::Release);
+            log!("Ночной режим: на сервере {target} — мониторинг");
+        }
+
+        // Check whether the server we're on has now reached 90 — if so, force a
+        // re-evaluation next iteration so we switch or go to stand-by.
+        if let Some(srv) = current_server {
+            if let Ok(s) = api.get_server(srv).await {
+                if s.players >= NIGHT_MAX {
+                    log!("Ночной режим: сервер {srv} достиг {NIGHT_MAX} игроков — переключаемся");
+                    seeding_server.store(false, std::sync::atomic::Ordering::Release);
+                    crate::process::kill_squad();
+                    current_server = None;
+                    continue;
+                }
+            }
+        }
+
+        if isleep(config.checkup_interval, &token).await.is_err() {
+            seeding_server.store(false, std::sync::atomic::Ordering::Release);
+            return false;
+        }
+    }
+}
+
+async fn resolve_seed_order(api: &HubApi, log: &LogSender) -> Vec<u8> {
     match api.get_seed_order().await {
         Ok(order) => {
             let _ = log.send(format!("Порядок сида с сервера: {order:?}"));
@@ -314,6 +586,23 @@ async fn seed_server(
     loop {
         if isleep(config.checkup_interval, token).await.is_err() {
             return SeedResult::Cancelled;
+        }
+
+        if config.time_limit_enabled {
+            let now = chrono::Local::now();
+            let now_mins = now.hour() * 60 + now.minute();
+            let limit_mins = config.time_limit_hour * 60 + config.time_limit_minute;
+            if now_mins >= limit_mins {
+                log!("Период сидинга завершён ({:02}:{:02})", config.time_limit_hour, config.time_limit_minute);
+                return SeedResult::PeriodEnd;
+            }
+        }
+
+        if config.night_mode_enabled && is_in_night_window(
+            config.night_start_hour, config.night_start_minute,
+            config.night_end_hour, config.night_end_minute,
+        ) {
+            return SeedResult::NightMode;
         }
 
         match api.check_player(&config.steam_id, server_num).await {

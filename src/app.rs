@@ -25,6 +25,7 @@ pub struct AppState {
     pub updating: std::sync::atomic::AtomicBool,
     pub seeded_after_hours: std::sync::atomic::AtomicBool,
     pub seeding_server: Arc<std::sync::atomic::AtomicBool>,
+    pub crash_restart: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl AppState {
@@ -59,6 +60,7 @@ pub fn setup(window: slint::Weak<AppWindow>) {
         updating: std::sync::atomic::AtomicBool::new(false),
         seeded_after_hours: std::sync::atomic::AtomicBool::new(false),
         seeding_server: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        crash_restart: Arc::new(std::sync::atomic::AtomicBool::new(false)),
     });
 
     connect_callbacks(window.clone(), state.clone());
@@ -69,7 +71,7 @@ pub fn setup(window: slint::Weak<AppWindow>) {
     tokio::spawn(api_health_loop(state.clone()));
     tokio::spawn(seed_order_poll(state.clone()));
     tokio::spawn(shutdown_scheduler(state.clone()));
-    tokio::spawn(updater::check_loop(state.clone()));
+    tokio::spawn(crate::updater::check(state.clone()));
 
     // Slint ComboBox/two-way bindings may fire changed handlers during first render;
     // schedule a final dirty reset to run after the event loop processes init events.
@@ -127,6 +129,10 @@ fn connect_callbacks(window: slint::Weak<AppWindow>, state: Arc<AppState>) {
         w.on_stop_seed(move || stop_seeding(s.clone()));
     }
     {
+        let s = state.clone();
+        w.on_stop_seed_only(move || stop_seeding_only(s.clone()));
+    }
+    {
         // Stop seed + exit. Saves settings first.
         let s = state.clone();
         w.on_stop_and_exit(move || {
@@ -145,6 +151,40 @@ fn connect_callbacks(window: slint::Weak<AppWindow>, state: Arc<AppState>) {
         w.on_open_log(move || {
             let path = config::log_path();
             let _ = std::process::Command::new("notepad").arg(&path).spawn();
+        });
+    }
+    {
+        let s = state.clone();
+        w.on_submit_feedback(move |contact, kind, note| {
+            let s = s.clone();
+            let contact = contact.to_string();
+            let kind = kind.to_string();
+            let note = note.to_string();
+            tokio::spawn(async move {
+                let steamid = s.config.lock().unwrap().steam_id.clone();
+                if steamid.len() != 17 {
+                    let _ = s.window.upgrade_in_event_loop(|w| {
+                        w.set_feedback_submitting(false);
+                        w.set_feedback_result("Steam ID не указан или неверный (нужно 17 цифр)".into());
+                    });
+                    return;
+                }
+                match s.api.submit_support(&steamid, &contact, &kind, &note).await {
+                    Ok(()) => {
+                        let _ = s.window.upgrade_in_event_loop(|w| {
+                            w.set_feedback_submitting(false);
+                            w.set_feedback_result("ok".into());
+                        });
+                    }
+                    Err(e) => {
+                        let msg = e.to_string();
+                        let _ = s.window.upgrade_in_event_loop(move |w| {
+                            w.set_feedback_submitting(false);
+                            w.set_feedback_result(msg.into());
+                        });
+                    }
+                }
+            });
         });
     }
     {
@@ -286,6 +326,22 @@ fn connect_callbacks(window: slint::Weak<AppWindow>, state: Arc<AppState>) {
     }
     {
         let s = state.clone();
+        w.on_open_changelog(move || {
+            let s = s.clone();
+            tokio::spawn(async move {
+                let text = match s.api.get_changelog().await {
+                    Ok((ver, log)) => format!("{ver}\n\n{log}"),
+                    Err(e) => format!("Не удалось загрузить список изменений:\n{e}"),
+                };
+                let _ = s.window.upgrade_in_event_loop(move |w| {
+                    w.set_changelog_text(text.into());
+                    w.set_show_changelog(true);
+                });
+            });
+        });
+    }
+    {
+        let s = state.clone();
         w.on_confirm_after_seed_proceed(move || execute_after_seed(&s));
     }
     {
@@ -348,32 +404,36 @@ fn connect_callbacks(window: slint::Weak<AppWindow>, state: Arc<AppState>) {
 
 fn start_seeding(state: Arc<AppState>, is_auto: bool) {
     if state.seed_token.lock().unwrap().is_some() {
-        state.log("Авто-старт: seed уже запущен — пропускаем");
+        state.log("Seed уже запущен");
         return;
     }
-    let (time_enabled, limit_h, limit_m) = {
+
+    let (time_enabled, limit_h, limit_m, period_start_h, period_start_m) = {
         let cfg = state.config.lock().unwrap();
-        (cfg.time_limit_enabled, cfg.time_limit_hour, cfg.time_limit_minute)
+        (cfg.time_limit_enabled, cfg.time_limit_hour, cfg.time_limit_minute,
+         cfg.seed_period_start_hour, cfg.seed_period_start_minute)
     };
     if time_enabled {
         use chrono::Timelike;
         let now = chrono::Local::now();
         let now_mins = now.hour() * 60 + now.minute();
         let limit_mins = limit_h * 60 + limit_m;
-        state.log(format!(
-            "Проверка лимита времени: сейчас {:02}:{:02}, лимит {:02}:{:02}",
-            now.hour(), now.minute(), limit_h, limit_m
-        ));
+        let start_mins = period_start_h * 60 + period_start_m;
+        if now_mins < start_mins {
+            state.log(format!(
+                "Период сидинга ещё не начался (с {:02}:{:02} до {:02}:{:02})",
+                period_start_h, period_start_m, limit_h, limit_m
+            ));
+            return;
+        }
         if now_mins >= limit_mins {
-            state.log(format!("Лимит времени достигнут ({limit_h:02}:{limit_m:02}) — seed не запущен"));
+            state.log(format!("Лимит времени ({limit_h:02}:{limit_m:02}) — требуется подтверждение"));
             let _ = state.window.upgrade_in_event_loop(move |w| {
                 w.set_after_hours_is_auto(is_auto);
                 w.set_show_after_hours_prompt(true);
             });
             return;
         }
-    } else {
-        state.log("Лимит времени отключён — продолжаем");
     }
     do_start_seeding(state);
 }
@@ -413,6 +473,7 @@ fn do_start_seeding(state: Arc<AppState>) {
     let log = state.log.clone();
     let win = state.window.clone();
     let seeding_server = state.seeding_server.clone();
+    let crash_restart = state.crash_restart.clone();
 
     let _ = win.upgrade_in_event_loop(|w| {
         w.set_seeding_active(true);
@@ -428,13 +489,16 @@ fn do_start_seeding(state: Arc<AppState>) {
         });
     }
 
+    // Activate HidHide before spawning the seeder task so the mouse is hidden
+    // before Squad launches, not after.
     let state2 = state.clone();
     tokio::spawn(async move {
-        let completed = crate::seeder::start_seeding(cfg.clone(), api, token, log.clone(), seeding_server).await;
+        let outcome = crate::seeder::start_seeding(cfg.clone(), api, token, log.clone(), seeding_server, crash_restart).await;
 
-        // Only fire after-seed action on natural completion, not on manual stop.
-        if completed {
-            perform_after_seed_action(&cfg, &state2);
+        match outcome {
+            crate::seeder::SeedOutcome::Completed => perform_after_seed_action(&cfg, &state2),
+            crate::seeder::SeedOutcome::NightCompleted => perform_after_seed_action_night(&cfg, &state2),
+            crate::seeder::SeedOutcome::Cancelled => {}
         }
 
         state2.seeded_after_hours.store(false, std::sync::atomic::Ordering::Release);
@@ -451,13 +515,36 @@ fn stop_seeding(state: Arc<AppState>) {
     if let Some(token) = state.seed_token.lock().unwrap().take() {
         token.cancel();
     }
+    // Clear seeding_server BEFORE killing squad so process_watch_loop doesn't
+    // treat this intentional kill as a crash.
+    state.seeding_server.store(false, std::sync::atomic::Ordering::Release);
     crate::process::kill_squad();
+
     // Synchronous restore after kill: stop_and_exit calls std::process::exit right
     // after this, and Squad rewrites resolution keys on every map change while alive.
     let cfg = state.config.lock().unwrap().clone();
     if cfg.eco_mode {
         crate::game::restore_ini_keys(&cfg);
         state.log("Настройки FPS/разрешения восстановлены");
+    }
+    let _ = state.window.upgrade_in_event_loop(|w| {
+        w.set_seeding_active(false);
+        w.set_stop_blocked(false);
+    });
+}
+
+/// Cancel seeding but leave Squad running. For use when seed was started by mistake
+/// while Squad was already open.
+fn stop_seeding_only(state: Arc<AppState>) {
+    if let Some(token) = state.seed_token.lock().unwrap().take() {
+        token.cancel();
+    }
+    let cfg = state.config.lock().unwrap().clone();
+    if cfg.eco_mode {
+        crate::game::restore_ini_keys(&cfg);
+        state.log("Eco-настройки восстановлены. Squad продолжает работать.");
+    } else {
+        state.log("Seed остановлен. Squad продолжает работать.");
     }
     let _ = state.window.upgrade_in_event_loop(|w| {
         w.set_seeding_active(false);
@@ -517,11 +604,20 @@ fn execute_after_seed(state: &Arc<AppState>) {
 async fn log_consumer(mut rx: mpsc::UnboundedReceiver<String>, window: slint::Weak<AppWindow>) {
     while let Some(raw) = rx.recv().await {
         if raw.starts_with('\x00') {
-            if raw == "\x00restore_toast" {
-                let _ = window.upgrade_in_event_loop(|w| {
-                    w.set_restore_toast_visible(true);
-                    w.set_stop_blocked(false);
-                });
+            match raw.as_str() {
+                "\x00restore_toast" => {
+                    let _ = window.upgrade_in_event_loop(|w| {
+                        w.set_restore_toast_visible(true);
+                        w.set_stop_blocked(false);
+                    });
+                }
+                "\x00night_mode_on" => {
+                    let _ = window.upgrade_in_event_loop(|w| w.set_night_mode_seeding(true));
+                }
+                "\x00night_mode_off" => {
+                    let _ = window.upgrade_in_event_loop(|w| w.set_night_mode_seeding(false));
+                }
+                _ => {}
             }
             continue;
         }
@@ -600,10 +696,15 @@ async fn status_poll_loop(state: Arc<AppState>) {
                 }
             }
 
+            let names: Vec<slint::SharedString> = std::iter::once("Не останавливаться".into())
+                .chain(cards.iter().map(|s| s.name.clone()))
+                .collect();
+
             let _ = state.window.upgrade_in_event_loop(move |w| {
                 use slint::VecModel;
                 use std::rc::Rc;
                 w.set_servers(Rc::new(VecModel::from(cards)).into());
+                w.set_server_names(Rc::new(VecModel::from(names)).into());
                 w.set_player_server(player_server);
                 w.set_refresh_ping(!w.get_refresh_ping());
             });
@@ -620,18 +721,35 @@ async fn process_watch_loop(state: Arc<AppState>) {
     let mut prev_squad = false;
     loop {
         let (squad, steam) = crate::process::check_processes();
+        let (msk_str, local_str) = {
+            use chrono::Timelike;
+            let msk = chrono::FixedOffset::east_opt(3 * 3600).unwrap();
+            let t_msk = chrono::Utc::now().with_timezone(&msk);
+            let t_local = chrono::Local::now();
+            (
+                format!("{:02}:{:02}", t_msk.hour(), t_msk.minute()),
+                format!("{:02}:{:02}", t_local.hour(), t_local.minute()),
+            )
+        };
         let _ = state.window.upgrade_in_event_loop(move |w| {
             w.set_squad_running(squad);
             w.set_steam_running(steam);
+            w.set_moscow_time(msk_str.into());
+            w.set_local_time(local_str.into());
         });
 
         let seeding = state.seed_token.lock().unwrap().is_some();
-        if prev_squad && !squad && seeding {
+        let on_server = state.seeding_server.load(std::sync::atomic::Ordering::Acquire);
+        if prev_squad && !squad && seeding && on_server {
             state.log("Squad пропал во время seed — возможный краш, проверяем через 10 сек...");
             tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
             if crate::process::find_crash_reporter() {
                 state.log("Обнаружен CrashReportClient — закрываем и ждём перезапуска...");
                 crate::process::kill_crash_reporter();
+                state.crash_restart.store(true, std::sync::atomic::Ordering::Release);
+            } else if !crate::process::check_processes().0 {
+                state.log("Silent crash — Squad не восстановился после 10 сек");
+                state.crash_restart.store(true, std::sync::atomic::Ordering::Release);
             }
         } else {
             tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
@@ -651,7 +769,7 @@ async fn api_health_loop(state: Arc<AppState>) {
         } else {
             consecutive_ok = 0;
         }
-        let show_ok = consecutive_ok >= 1;
+        let show_ok = consecutive_ok >= 2;
         let _ = state
             .window
             .upgrade_in_event_loop(move |w| w.set_api_ok(show_ok));
@@ -661,18 +779,15 @@ async fn api_health_loop(state: Arc<AppState>) {
 
 async fn seed_order_poll(state: Arc<AppState>) {
     loop {
-        let has_override = state.config.lock().unwrap().seed_order_override.is_some();
-        if !has_override {
-            if let Ok(order) = state.api.get_seed_order().await {
-                let display = order
-                    .iter()
-                    .map(|&n| crate::api::name_for(n))
-                    .collect::<Vec<_>>()
-                    .join(" → ");
-                let _ = state.window.upgrade_in_event_loop(move |w| {
-                    w.set_remote_seed_order(display.into());
-                });
-            }
+        if let Ok(order) = state.api.get_seed_order().await {
+            let display = order
+                .iter()
+                .map(|&n| crate::api::name_for(n))
+                .collect::<Vec<_>>()
+                .join(" → ");
+            let _ = state.window.upgrade_in_event_loop(move |w| {
+                w.set_remote_seed_order(display.into());
+            });
         }
         tokio::time::sleep(tokio::time::Duration::from_secs(300)).await;
     }
@@ -711,16 +826,24 @@ async fn shutdown_scheduler(state: Arc<AppState>) {
     }
 }
 
-mod updater {
-    use super::AppState;
-    use std::sync::Arc;
-
-    pub async fn check_loop(state: Arc<AppState>) {
-        loop {
-            crate::updater::check(&state).await;
-            tokio::time::sleep(tokio::time::Duration::from_secs(600)).await;
-        }
-    }
+fn perform_after_seed_action_night(cfg: &Config, state: &Arc<AppState>) {
+    if cfg.night_after_action == AfterSeedAction::Nothing { return; }
+    let msg: slint::SharedString = match cfg.night_after_action {
+        AfterSeedAction::CloseAndExit => "Закрыть игру и Выйти",
+        AfterSeedAction::Shutdown => "Завершение Работы",
+        AfterSeedAction::Sleep => "Спящий Режим",
+        AfterSeedAction::Nothing => return,
+    }.into();
+    *state.pending_after_seed.lock().unwrap() = Some(cfg.night_after_action.clone());
+    let _ = state.window.upgrade_in_event_loop(move |w| {
+        w.set_after_seed_confirm_msg(msg);
+        w.set_show_after_seed_confirm(true);
+    });
+    let s = state.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
+        execute_after_seed(&s);
+    });
 }
 
 // ── Config sync ───────────────────────────────────────────────────────────────
@@ -738,26 +861,17 @@ fn sync_config_to_ui(w: &AppWindow, cfg: &Config) {
             .unwrap_or_default()
             .into(),
     );
-    w.set_cfg_preferred_res(
-        match (cfg.preferred_res_x, cfg.preferred_res_y) {
-            (Some(x), Some(y)) => format!("{x}×{y}"),
-            _ => String::new(),
-        }
-        .into(),
-    );
+    w.set_cfg_preferred_res_x_str(cfg.preferred_res_x.unwrap_or(0).to_string().into());
+    w.set_cfg_preferred_res_y_str(cfg.preferred_res_y.unwrap_or(0).to_string().into());
+    w.set_cfg_seed_period_start_hour(cfg.seed_period_start_hour as i32);
+    w.set_cfg_seed_period_start_minute(cfg.seed_period_start_minute as i32);
+    w.set_cfg_night_mode_enabled(cfg.night_mode_enabled);
+    w.set_cfg_night_start_hour(cfg.night_start_hour as i32);
+    w.set_cfg_night_start_minute(cfg.night_start_minute as i32);
+    w.set_cfg_night_end_hour(cfg.night_end_hour as i32);
+    w.set_cfg_night_end_minute(cfg.night_end_minute as i32);
+    w.set_cfg_night_after_action(after_action_str(&cfg.night_after_action).into());
     w.set_cfg_steam_id(cfg.steam_id.clone().into());
-    w.set_cfg_seed_order_override(
-        cfg.seed_order_override
-            .as_ref()
-            .map(|v| {
-                v.iter()
-                    .map(|n| n.to_string())
-                    .collect::<Vec<_>>()
-                    .join(",")
-            })
-            .unwrap_or_default()
-            .into(),
-    );
     w.set_cfg_desired_players(cfg.desired_players as i32);
     w.set_cfg_checkup_interval(cfg.checkup_interval as i32);
     w.set_cfg_game_launch_delay(cfg.game_launch_delay as i32);
@@ -802,19 +916,6 @@ fn save_settings(state: Arc<AppState>) {
         None => return,
     };
 
-    let seed_override = {
-        let raw = w.get_cfg_seed_order_override().to_string();
-        if raw.trim().is_empty() {
-            None
-        } else {
-            Some(
-                raw.split(',')
-                    .filter_map(|s| s.trim().parse::<u8>().ok())
-                    .collect::<Vec<_>>(),
-            )
-        }
-    };
-
     let old_startup;
     let new_startup;
 
@@ -822,20 +923,19 @@ fn save_settings(state: Arc<AppState>) {
         let mut cfg = state.config.lock().unwrap();
         old_startup = cfg.start_on_startup;
 
-        cfg.preferred_fps = w
-            .get_cfg_preferred_fps()
-            .to_string()
-            .trim()
-            .parse::<u32>()
-            .ok();
-        cfg.preferred_menu_fps = w
-            .get_cfg_preferred_menu_fps()
-            .to_string()
-            .trim()
-            .parse::<u32>()
-            .ok();
+        cfg.preferred_fps = w.get_cfg_preferred_fps().to_string().trim().parse::<u32>().ok();
+        cfg.preferred_menu_fps = w.get_cfg_preferred_menu_fps().to_string().trim().parse::<u32>().ok();
+        cfg.preferred_res_x = w.get_cfg_preferred_res_x_str().to_string().trim().parse::<u32>().ok().filter(|&v| v > 0);
+        cfg.preferred_res_y = w.get_cfg_preferred_res_y_str().to_string().trim().parse::<u32>().ok().filter(|&v| v > 0);
+        cfg.seed_period_start_hour = w.get_cfg_seed_period_start_hour() as u32;
+        cfg.seed_period_start_minute = w.get_cfg_seed_period_start_minute() as u32;
+        cfg.night_mode_enabled = w.get_cfg_night_mode_enabled();
+        cfg.night_start_hour = w.get_cfg_night_start_hour() as u32;
+        cfg.night_start_minute = w.get_cfg_night_start_minute() as u32;
+        cfg.night_end_hour = w.get_cfg_night_end_hour() as u32;
+        cfg.night_end_minute = w.get_cfg_night_end_minute() as u32;
+        cfg.night_after_action = parse_after_action(&w.get_cfg_night_after_action());
         cfg.steam_id = w.get_cfg_steam_id().to_string();
-        cfg.seed_order_override = seed_override;
         cfg.desired_players = w.get_cfg_desired_players() as u32;
         cfg.checkup_interval = w.get_cfg_checkup_interval() as u64;
         cfg.game_launch_delay = w.get_cfg_game_launch_delay() as u32;
@@ -924,6 +1024,7 @@ fn parse_after_action(s: &slint::SharedString) -> AfterSeedAction {
     }
 }
 
+
 fn spawn_hidden(cmd: &mut std::process::Command) -> std::io::Result<std::process::Child> {
     #[cfg(windows)]
     {
@@ -935,3 +1036,5 @@ fn spawn_hidden(cmd: &mut std::process::Command) -> std::io::Result<std::process
         cmd.spawn()
     }
 }
+
+

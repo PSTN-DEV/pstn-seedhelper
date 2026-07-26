@@ -422,10 +422,10 @@ export component AppWindow inherits Window {
     // ── Data ──────────────────────────────────────────────────────────────
 
     in-out property <[ServerStatus]> servers: [
-        { name: "PSTN #1 Первый Сервер",      online: false, players: 0, max-players: 100, queue: 0, map: "", faction1: "", faction2: "" },
-        { name: "PSTN #2 [RU] ВТОРЖЕНИЕ | ИНВАГА | pstnsquad.ru",              online: false, players: 0, max-players: 100, queue: 0, map: "", faction1: "", faction2: "" },
-        { name: "PSTN #3 ВС РФ vs ВСУ 24/7",  online: false, players: 0, max-players: 100, queue: 0, map: "", faction1: "", faction2: "" },
-        { name: "PSTN #4 Все режимы",          online: false, players: 0, max-players: 100, queue: 0, map: "", faction1: "", faction2: "" },
+        { name: "PSTN #1",      online: false, players: 0, max-players: 100, queue: 0, map: "", faction1: "", faction2: "" },
+        { name: "PSTN #2",              online: false, players: 0, max-players: 100, queue: 0, map: "", faction1: "", faction2: "" },
+        { name: "PSTN #3",  online: false, players: 0, max-players: 100, queue: 0, map: "", faction1: "", faction2: "" },
+        { name: "PSTN #4",          online: false, players: 0, max-players: 100, queue: 0, map: "", faction1: "", faction2: "" },
     ];
 
     in-out property <string> log-text: "";
@@ -433,7 +433,9 @@ export component AppWindow inherits Window {
     in-out property <bool>   stop-blocked: false;
     in-out property <string> remote-seed-order: "";
     in-out property <string> update-notice: "";
-    in-out property <bool>   show-confirm-exit: false;
+    in-out property <bool>   show-confirm-exit: false;   // kept for Rust compat, drives show-stop-confirm
+    in-out property <bool>   show-stop-confirm: false;
+    in-out property <bool>   stop-confirm-exits-app: false;
     in-out property <bool>   squad-running: false;
     in-out property <bool>   steam-running: false;
     in-out property <bool>   api-ok: false;
@@ -472,7 +474,19 @@ export component AppWindow inherits Window {
     in-out property <bool>   cfg-eco-mode: false;
     in-out property <string> cfg-preferred-fps: "";       // empty = None (Squad default)
     in-out property <string> cfg-preferred-menu-fps: ""; // empty = None (Squad default)
-    in-out property <string> cfg-preferred-res: "";      // e.g. "1920×1080", auto-detected
+    in-out property <string> cfg-preferred-res-x-str: "";
+    in-out property <string> cfg-preferred-res-y-str: "";
+    in-out property <int>    cfg-seed-period-start-hour: 5;
+    in-out property <int>    cfg-seed-period-start-minute: 0;
+    in-out property <bool>   cfg-night-mode-enabled: false;
+    in-out property <int>    cfg-night-start-hour: 23;
+    in-out property <int>    cfg-night-start-minute: 0;
+    in-out property <int>    cfg-night-end-hour: 5;
+    in-out property <int>    cfg-night-end-minute: 0;
+    in-out property <string> cfg-night-after-action: "Ничего";
+    in-out property <[string]> server-names: ["Не останавливаться", "PSTN #1", "PSTN #2", "PSTN #3", "PSTN #4"];
+    in-out property <bool>   show-changelog: false;
+    in-out property <string> changelog-text: "";
     in-out property <string> cfg-after-action: "Ничего";
     in-out property <int>    cfg-stop-after: 0;
     in-out property <string> cfg-scheduled-shutdown: "";    // kept for Rust compat
@@ -485,6 +499,7 @@ export component AppWindow inherits Window {
 
     callback start-seed();
     callback stop-seed();
+    callback stop-seed-only();
     callback stop-and-exit();
     callback exit-app();
     callback open-log();
@@ -505,6 +520,20 @@ export component AppWindow inherits Window {
     callback force-start-seed();
     callback confirm-after-seed-proceed();
     callback confirm-after-seed-cancel();
+    callback submit-feedback(string, string, string);
+    callback open-changelog();
+
+    in-out property <bool>   night-mode-seeding: false;
+    in-out property <string> moscow-time: "";
+    in-out property <string> local-time: "";
+
+    // ── Feedback modal state ──────────────────────────────────────────────
+    in-out property <bool>   show-feedback-modal: false;
+    in-out property <string> feedback-contact: "";
+    in-out property <string> feedback-note: "";
+    in-out property <bool>   feedback-is-bug: false;
+    in-out property <bool>   feedback-submitting: false;
+    in-out property <string> feedback-result: "";
 
     // ── Internal state ────────────────────────────────────────────────────
 
@@ -544,9 +573,20 @@ export component AppWindow inherits Window {
     changed cfg-shutdown-minute      => { root.settings-dirty = true; }
     changed cfg-shutdown-enabled     => { root.settings-dirty = true; }
     changed cfg-auto-update          => { root.settings-dirty = true; }
+    changed cfg-preferred-res-x-str  => { root.settings-dirty = true; }
+    changed cfg-preferred-res-y-str  => { root.settings-dirty = true; }
+    changed cfg-seed-period-start-hour   => { root.settings-dirty = true; }
+    changed cfg-seed-period-start-minute => { root.settings-dirty = true; }
+    changed cfg-night-mode-enabled   => { root.settings-dirty = true; }
+    changed cfg-night-start-hour     => { root.settings-dirty = true; }
+    changed cfg-night-start-minute   => { root.settings-dirty = true; }
+    changed cfg-night-end-hour       => { root.settings-dirty = true; }
+    changed cfg-night-end-minute     => { root.settings-dirty = true; }
+    changed cfg-night-after-action   => { root.settings-dirty = true; }
+    changed show-confirm-exit        => { if (root.show-confirm-exit) { root.show-confirm-exit = false; root.stop-confirm-exits-app = true; root.show-stop-confirm = true; } }
     changed refresh-ping             => { refresh-elapsed = 0; }
     changed log-text                 => { log-flick.viewport-y = min(0px, log-flick.height - log-flick.viewport-height); }
-    changed stop-blocked             => { if (!root.stop-blocked && root.show-wait-exit) { root.show-wait-exit = false; root.show-confirm-exit = true; } }
+    changed stop-blocked             => { if (!root.stop-blocked && root.show-wait-exit) { root.show-wait-exit = false; root.stop-confirm-exits-app = true; root.show-stop-confirm = true; } }
     animate popup-alpha { duration: 220ms; easing: ease-out; }
     private property <float> restore-toast-alpha: restore-toast-visible ? 1.0 : 0.0;
     animate restore-toast-alpha { duration: 220ms; easing: ease-out; }
@@ -658,7 +698,8 @@ export component AppWindow inherits Window {
                                     root.exit-wait-secs = 10;
                                     root.show-wait-exit = true;
                                 } else {
-                                    root.show-confirm-exit = true;
+                                    root.stop-confirm-exits-app = true;
+                                    root.show-stop-confirm = true;
                                 }
                             } else {
                                 root.exit-app();
@@ -771,7 +812,10 @@ export component AppWindow inherits Window {
                     seedta := TouchArea {
                         clicked => {
                             if (root.seeding-active) {
-                                if (!root.stop-blocked) { root.stop-seed(); }
+                                if (!root.stop-blocked) {
+                                    root.stop-confirm-exits-app = false;
+                                    root.show-stop-confirm = true;
+                                }
                             } else { root.start-seed(); }
                         }
                         mouse-cursor: (root.seeding-active && root.stop-blocked) ? default : pointer;
@@ -800,7 +844,10 @@ export component AppWindow inherits Window {
                     extta := TouchArea {
                         clicked => {
                             if (root.seeding-active) {
-                                if (!root.stop-blocked) { root.show-confirm-exit = true; }
+                                if (!root.stop-blocked) {
+                                    root.stop-confirm-exits-app = true;
+                                    root.show-stop-confirm = true;
+                                }
                             } else { root.exit-app(); }
                         }
                         mouse-cursor: (root.seeding-active && root.stop-blocked) ? default : pointer;
@@ -823,25 +870,36 @@ export component AppWindow inherits Window {
 
                 Rectangle {
                     width: 150px; border-radius: 9px;
-                    background: logta.has-hover ? #2e2e2e : #272727;
+                    background: fbkta.has-hover ? #2e2e2e : #272727;
                     border-width: 1px; border-color: #ffffff0f;
-                    logta := TouchArea { clicked => { root.open-log(); } mouse-cursor: pointer; }
+                    fbkta := TouchArea {
+                        clicked => {
+                            root.feedback-contact = "";
+                            root.feedback-note = "";
+                            root.feedback-is-bug = false;
+                            root.feedback-submitting = false;
+                            root.feedback-result = "";
+                            root.show-feedback-modal = true;
+                        }
+                        mouse-cursor: pointer;
+                    }
                     Text {
-                        text: "ЛОГ ФАЙЛ";
-                        color: logta.has-hover ? #929292 : #555555;
-                        font-size: 13px; font-weight: 600;
+                        text: "ОБРАТНАЯ СВЯЗЬ";
+                        color: fbkta.has-hover ? #929292 : #555555;
+                        font-size: 12px; font-weight: 600;
                         horizontal-alignment: center; vertical-alignment: center;
                     }
                 }
 
                 Rectangle {
                     width: 110px; border-radius: 9px;
-                    background: #272727;
+                    background: ver-ta.has-hover ? #2e2e2e : #272727;
                     border-width: 1px; border-color: #ffffff0f;
                     clip: false;
+                    ver-ta := TouchArea { clicked => { root.open-changelog(); } mouse-cursor: pointer; }
                     Text {
                         text: "v\{root.app-version}";
-                        color: #555555;
+                        color: ver-ta.has-hover ? #929292 : #555555;
                         font-size: 12px; font-weight: 600;
                         horizontal-alignment: center; vertical-alignment: center;
                     }
@@ -864,8 +922,8 @@ export component AppWindow inherits Window {
                 HorizontalLayout {
                     padding-left: 22px; padding-right: 22px; spacing: 0px; alignment: space-between;
                     StatusChip {
-                        label: root.seeding-active ? "Seed Helper активен" : "Seed Helper выключен";
-                        dot-color: root.seeding-active ? #4ac87a : #6b6b6b;
+                        label: root.night-mode-seeding ? "Ночной режим активен" : (root.seeding-active ? "Seed Helper активен" : "Seed Helper выключен");
+                        dot-color: root.night-mode-seeding ? #4a6bd4 : (root.seeding-active ? #4ac87a : #6b6b6b);
                         glowing: root.seeding-active;
                     }
                     StatusChip {
@@ -1053,7 +1111,7 @@ export component AppWindow inherits Window {
 
                 SettingsRow { label: "Действие после Сида:";
                     ComboBox {
-                        width: 220px; height: 34px;
+                        width: 280px; height: 34px;
                         model: ["Ничего", "Закрыть игру и Выйти (Рекомендуется)", "Завершение Работы", "Спящий Режим"];
                         current-value <=> root.cfg-after-action;
                     }
@@ -1063,7 +1121,7 @@ export component AppWindow inherits Window {
                 SettingsRow { label: "Остановиться после:";
                     ComboBox {
                         width: 280px; height: 34px;
-                        model: ["Не останавливаться", "PSTN #1", "PSTN #2", "PSTN #3", "PSTN #4"];
+                        model: root.server-names;
                         current-index <=> root.cfg-stop-after;
                     }
                 }
@@ -1090,21 +1148,45 @@ export component AppWindow inherits Window {
                     checked <=> root.cfg-auto-update;
                 }
 
-                // Never start seeding after
+                // Seed period (from / to)
                 HorizontalLayout {
-                    height: 42px; spacing: 16px; padding-bottom: 14px;
-                    Text { text: "Не начинать после:"; color: #929292; font-size: 13.5px; vertical-alignment: center; width: 200px; }
-                    HorizontalLayout {
-                        spacing: 12px;
-                        if root.cfg-time-limit-enabled : TimeSelector {
-                            hour <=> root.cfg-time-limit;
-                            minute <=> root.cfg-time-limit-minute;
+                    spacing: 0px; alignment: space-between; padding-bottom: 16px;
+                    min-height: 64px;
+
+                    VerticalLayout {
+                        alignment: center; spacing: 2px;
+                        Text { text: "Период сидинга"; color: #c9c9c9; font-size: 13.5px; font-weight: 600; }
+                        Text { text: "Период в который разрешён сидинг"; color: #555555; font-size: 12px; }
+                        if root.local-time != "" : HorizontalLayout {
+                            spacing: 14px;
+                            Text { text: "Местное: \{root.local-time}"; color: #444444; font-size: 11px; vertical-alignment: center; }
+                            Text { text: "МСК: \{root.moscow-time}"; color: #444444; font-size: 11px; vertical-alignment: center; }
                         }
-                        if !root.cfg-time-limit-enabled : VerticalLayout {
-                            alignment: center;
-                            Text { text: "Без ограничений"; color: #555555; font-size: 13px; }
+                    }
+
+                    VerticalLayout {
+                        alignment: center;
+                        if root.cfg-time-limit-enabled : HorizontalLayout {
+                            spacing: 8px; alignment: center;
+                            Text { text: "с"; color: #555555; font-size: 13px; vertical-alignment: center; }
+                            TimeSelector {
+                                hour <=> root.cfg-seed-period-start-hour;
+                                minute <=> root.cfg-seed-period-start-minute;
+                            }
+                            Text { text: "до"; color: #555555; font-size: 13px; vertical-alignment: center; }
+                            TimeSelector {
+                                hour <=> root.cfg-time-limit;
+                                minute <=> root.cfg-time-limit-minute;
+                            }
                         }
-                        VerticalLayout { alignment: center; ToggleSwitch { checked <=> root.cfg-time-limit-enabled; } }
+                        if !root.cfg-time-limit-enabled : Text {
+                            text: "Без ограничений"; color: #555555; font-size: 13px;
+                        }
+                    }
+
+                    VerticalLayout {
+                        alignment: center;
+                        ToggleSwitch { checked <=> root.cfg-time-limit-enabled; }
                     }
                 }
 
@@ -1152,18 +1234,27 @@ export component AppWindow inherits Window {
                     }
                     SettingsRow { label: "Разрешение экрана:";
                         HorizontalLayout {
-                            spacing: 12px;
+                            spacing: 8px;
+                            LineEdit {
+                                text <=> root.cfg-preferred-res-x-str;
+                                width: 80px; height: 34px;
+                                font-family: "JetBrains Mono";
+                                placeholder-text: "Ширина";
+                            }
                             VerticalLayout {
+                                width: 16px;
                                 alignment: center;
-                                Text {
-                                    text: root.cfg-preferred-res != "" ? root.cfg-preferred-res : "Не определено";
-                                    color: root.cfg-preferred-res != "" ? #e5e5e5 : #555555;
-                                    font-family: "JetBrains Mono"; font-size: 13px; font-weight: 600;
-                                }
+                                Text { text: "×"; color: #555555; font-size: 14px; font-weight: 700; }
+                            }
+                            LineEdit {
+                                text <=> root.cfg-preferred-res-y-str;
+                                width: 80px; height: 34px;
+                                font-family: "JetBrains Mono";
+                                placeholder-text: "Высота";
                             }
                             VerticalLayout {
                                 alignment: center;
-                                Text { text: "Определено автоматически — восстанавливается после сида"; color: #555555; font-size: 11px; }
+                                Text { text: "Восстанавливается после сида"; color: #555555; font-size: 11px; }
                             }
                         }
                     }
@@ -1254,6 +1345,61 @@ export component AppWindow inherits Window {
                         }
                     }
 
+                    SectionDivider { text: "НОЧНОЙ РЕЖИМ (ЗАПОЛНЕНИЕ)"; }
+
+                    HorizontalLayout {
+                        spacing: 0px; alignment: space-between; padding-bottom: 16px;
+                        min-height: 64px;
+
+                        VerticalLayout {
+                            alignment: center; spacing: 2px;
+                            Text { text: "Ночной режим"; color: #c9c9c9; font-size: 13.5px; font-weight: 600; }
+                            Text { text: "Авто-заход на серверы с 50–90 игроков в ночное время"; color: #555555; font-size: 12px; }
+                            if root.local-time != "" : HorizontalLayout {
+                                spacing: 14px;
+                                Text { text: "Местное: \{root.local-time}"; color: #444444; font-size: 11px; vertical-alignment: center; }
+                                Text { text: "МСК: \{root.moscow-time}"; color: #444444; font-size: 11px; vertical-alignment: center; }
+                            }
+                        }
+
+                        VerticalLayout {
+                            alignment: center;
+                            if root.cfg-night-mode-enabled : HorizontalLayout {
+                                spacing: 8px; alignment: center;
+                                Text { text: "с"; color: #555555; font-size: 13px; vertical-alignment: center; }
+                                TimeSelector {
+                                    hour <=> root.cfg-night-start-hour;
+                                    minute <=> root.cfg-night-start-minute;
+                                }
+                                Text { text: "до"; color: #555555; font-size: 13px; vertical-alignment: center; }
+                                TimeSelector {
+                                    hour <=> root.cfg-night-end-hour;
+                                    minute <=> root.cfg-night-end-minute;
+                                }
+                            }
+                            if !root.cfg-night-mode-enabled : Text {
+                                text: "Не активен"; color: #555555; font-size: 13px;
+                            }
+                        }
+
+                        VerticalLayout {
+                            alignment: center;
+                            ToggleSwitch { checked <=> root.cfg-night-mode-enabled; }
+                        }
+                    }
+
+                    if root.cfg-night-mode-enabled : VerticalLayout {
+                        spacing: 0px; padding-bottom: 8px;
+                        SettingsRow { label: "Действие после ночи:";
+                            ComboBox {
+                                width: 280px; height: 34px;
+                                model: ["Ничего", "Закрыть игру и Выйти (Рекомендуется)", "Завершение Работы", "Спящий Режим"];
+                                current-value <=> root.cfg-night-after-action;
+                            }
+                        }
+                        Rectangle { height: 8px; }
+                    }
+
                     SectionDivider { text: "ЭКСПЕРИМЕНТАЛЬНО"; }
 
                     ModeToggleRow {
@@ -1296,6 +1442,14 @@ export component AppWindow inherits Window {
                         border-width: 1px; border-color: #ffffff10;
                         rstta := TouchArea { clicked => { root.reset-settings(); } mouse-cursor: pointer; }
                         Text { text: "Сбросить"; color: #6b6b6b; font-size: 13px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
+                    }
+
+                    Rectangle {
+                        width: 130px; border-radius: 9px;
+                        background: logta-s.has-hover ? #2e2e2e : #272727;
+                        border-width: 1px; border-color: #ffffff0f;
+                        logta-s := TouchArea { clicked => { root.open-log(); } mouse-cursor: pointer; }
+                        Text { text: "Лог Файл"; color: logta-s.has-hover ? #929292 : #555555; font-size: 13px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
                     }
                 }
 
@@ -1374,8 +1528,8 @@ export component AppWindow inherits Window {
 
         Rectangle {
             x: (parent.width - 430px) / 2;
-            y: (parent.height - 200px) / 2;
-            width: 430px; height: 200px;
+            y: (parent.height - 220px) / 2;
+            width: 430px; height: 220px;
             border-radius: 14px;
             background: #252525;
             border-width: 1px; border-color: #ffffff18;
@@ -1392,7 +1546,9 @@ export component AppWindow inherits Window {
                 }
                 Rectangle { height: 8px; }
                 Text {
-                    text: "Настройки игры ещё не восстановлены. Пожалуйста, подождите.";
+                    text: root.exit-wait-secs > 0
+                        ? "Настройки игры ещё не восстановлены. Пожалуйста, подождите."
+                        : "Не удалось дождаться восстановления. Можно выйти принудительно.";
                     color: #6b6b6b; font-size: 13px; wrap: word-wrap;
                 }
                 Rectangle { height: 16px; }
@@ -1400,8 +1556,9 @@ export component AppWindow inherits Window {
                 HorizontalLayout {
                     spacing: 0px; alignment: center;
                     Text {
-                        text: "\{root.exit-wait-secs}";
-                        color: #4a6bd4; font-size: 36px; font-weight: 700;
+                        text: root.exit-wait-secs > 0 ? "\{root.exit-wait-secs}" : "!";
+                        color: root.exit-wait-secs > 0 ? #4a6bd4 : #d4816e;
+                        font-size: 36px; font-weight: 700;
                         font-family: "JetBrains Mono";
                         horizontal-alignment: center; vertical-alignment: center;
                     }
@@ -1409,7 +1566,20 @@ export component AppWindow inherits Window {
                 Rectangle { height: 16px; }
 
                 HorizontalLayout {
-                    height: 38px; alignment: end;
+                    height: 38px; spacing: 10px;
+                    if root.exit-wait-secs <= 0 : Rectangle {
+                        horizontal-stretch: 1; border-radius: 9px;
+                        background: wex-force.has-hover ? #b54040 : #a13a3a;
+                        wex-force := TouchArea {
+                            clicked => { root.show-wait-exit = false; root.stop-and-exit(); }
+                            mouse-cursor: pointer;
+                        }
+                        Text {
+                            text: "Выйти принудительно";
+                            color: #f5e5e0; font-size: 13px; font-weight: 700;
+                            horizontal-alignment: center; vertical-alignment: center;
+                        }
+                    }
                     Rectangle {
                         width: 115px; border-radius: 9px;
                         background: wex-cancel.has-hover ? #333333 : #2c2c2c;
@@ -1429,72 +1599,85 @@ export component AppWindow inherits Window {
         }
     }
 
-    // ── Stop & Exit confirmation dialog ────────────────────────────────────────
-    if root.show-confirm-exit : Rectangle {
+    // ── Unified stop confirmation dialog ──────────────────────────────────────
+    if root.show-stop-confirm : Rectangle {
         x: 0; y: 0; width: parent.width; height: parent.height;
         background: #00000099;
 
-        // Absorbs all clicks that fall outside the dialog card
         TouchArea { x: 0; y: 0; width: parent.width; height: parent.height; }
 
-        // Dialog card (higher z than backdrop absorber)
         Rectangle {
-            x: (parent.width - 430px) / 2;
-            y: (parent.height - 190px) / 2;
-            width: 430px; height: 190px;
-            border-radius: 14px;
-            background: #252525;
+            x: (parent.width - 460px) / 2;
+            y: (parent.height - 210px) / 2;
+            width: 460px; height: 210px;
+            border-radius: 14px; background: #252525;
             border-width: 1px; border-color: #ffffff18;
             drop-shadow-blur: 48px; drop-shadow-color: #000000cc;
 
-            // Absorbs clicks on card body so they don't reach the backdrop TouchArea
             TouchArea { x: 0; y: 0; width: parent.width; height: parent.height; }
 
             VerticalLayout {
                 padding: 26px; spacing: 0px;
 
                 Text {
-                    text: "Выйти из приложения?";
+                    text: root.stop-confirm-exits-app ? "Выйти из приложения?" : "Остановить Сид?";
                     color: #e5e5e5; font-size: 15px; font-weight: 700;
                 }
                 Rectangle { height: 8px; }
                 Text {
-                    text: "Seeding будет остановлен, Squad закроется, а настройки будут восстановлены.";
+                    text: "Сид будет остановлен. Что сделать с Squad?";
                     color: #6b6b6b; font-size: 13px; wrap: word-wrap;
                 }
                 Rectangle { height: 22px; }
 
                 HorizontalLayout {
-                    spacing: 10px; height: 42px;
+                    spacing: 8px; height: 42px;
 
                     Rectangle {
                         horizontal-stretch: 1; border-radius: 9px;
-                        background: cnfta.has-hover ? #b54040 : #a13a3a;
-                        cnfta := TouchArea {
+                        background: sc-primary.has-hover ? #b54040 : #a13a3a;
+                        sc-primary := TouchArea {
                             clicked => {
-                                root.show-confirm-exit = false;
-                                root.stop-and-exit();
+                                root.show-stop-confirm = false;
+                                if (root.stop-confirm-exits-app) { root.stop-and-exit(); }
+                                else { root.stop-seed(); }
                             }
                             mouse-cursor: pointer;
                         }
                         Text {
-                            text: "Да, выйти";
-                            color: #f5e5e0; font-size: 13.5px; font-weight: 700;
+                            text: root.stop-confirm-exits-app ? "Закрыть Squad и выйти" : "Закрыть Squad";
+                            color: #f5e5e0; font-size: 13px; font-weight: 700;
                             horizontal-alignment: center; vertical-alignment: center;
                         }
                     }
 
                     Rectangle {
-                        width: 115px; border-radius: 9px;
-                        background: cncta.has-hover ? #333333 : #2c2c2c;
-                        border-width: 1px; border-color: #ffffff14;
-                        cncta := TouchArea {
-                            clicked => { root.show-confirm-exit = false; }
+                        horizontal-stretch: 1; border-radius: 9px;
+                        background: sc-only.has-hover ? #2a3520 : #1e2a1a;
+                        border-width: 1px; border-color: sc-only.has-hover ? #4ac87a50 : #4ac87a20;
+                        sc-only := TouchArea {
+                            clicked => { root.show-stop-confirm = false; root.stop-seed-only(); }
+                            mouse-cursor: pointer;
+                        }
+                        Text {
+                            text: "Не закрывать Squad";
+                            color: sc-only.has-hover ? #4ac87a : #3a7a50;
+                            font-size: 13px; font-weight: 700;
+                            horizontal-alignment: center; vertical-alignment: center;
+                        }
+                    }
+
+                    Rectangle {
+                        width: 90px; border-radius: 9px;
+                        background: sc-cancel.has-hover ? #333333 : #272727;
+                        border-width: 1px; border-color: #ffffff10;
+                        sc-cancel := TouchArea {
+                            clicked => { root.show-stop-confirm = false; }
                             mouse-cursor: pointer;
                         }
                         Text {
                             text: "Отмена";
-                            color: #929292; font-size: 13.5px; font-weight: 600;
+                            color: #555555; font-size: 13px; font-weight: 600;
                             horizontal-alignment: center; vertical-alignment: center;
                         }
                     }
@@ -1904,6 +2087,182 @@ export component AppWindow inherits Window {
                         border-width: 1px; border-color: #ffffff14;
                         sqp-no := TouchArea { clicked => { root.show-squad-prompt = false; } mouse-cursor: pointer; }
                         Text { text: "Отмена"; color: #929292; font-size: 13.5px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
+                    }
+                }
+            }
+        }
+    }
+
+    // ── Feedback / Bug-report modal ───────────────────────────────────────────
+    if root.show-feedback-modal : Rectangle {
+        x: 0; y: 0; width: parent.width; height: parent.height;
+        background: #00000099;
+        TouchArea { x: 0; y: 0; width: parent.width; height: parent.height; }
+        Rectangle {
+            x: (parent.width - 500px) / 2;
+            y: (parent.height - 390px) / 2;
+            width: 500px; height: 390px;
+            border-radius: 14px; background: #252525;
+            border-width: 1px; border-color: #ffffff18;
+            drop-shadow-blur: 48px; drop-shadow-color: #000000cc;
+            TouchArea { x: 0; y: 0; width: parent.width; height: parent.height; }
+            VerticalLayout {
+                padding: 26px; spacing: 0px;
+
+                Text { text: "Обратная связь"; color: #e5e5e5; font-size: 15px; font-weight: 700; }
+                Rectangle { height: 16px; }
+
+                // Contact
+                HorizontalLayout {
+                    height: 34px; spacing: 10px;
+                    Text { text: "Контакт:"; color: #929292; font-size: 13px; font-weight: 600; vertical-alignment: center; width: 90px; }
+                    LineEdit {
+                        horizontal-stretch: 1; height: 34px;
+                        placeholder-text: "discord (zhenyapro13)";
+                        text <=> root.feedback-contact;
+                        font-size: 13px;
+                    }
+                }
+                Rectangle { height: 10px; }
+
+                // Type selector
+                HorizontalLayout {
+                    height: 34px; spacing: 10px;
+                    Text { text: "Тип:"; color: #929292; font-size: 13px; font-weight: 600; vertical-alignment: center; width: 90px; }
+                    Rectangle {
+                        width: 120px; height: 34px; border-radius: 8px;
+                        background: !root.feedback-is-bug ? #3ca96e : (fb-fbk.has-hover ? #2a2a2a : #1e1e1e);
+                        border-width: 1px; border-color: !root.feedback-is-bug ? #3ca96e80 : #ffffff10;
+                        fb-fbk := TouchArea { clicked => { root.feedback-is-bug = false; } mouse-cursor: pointer; }
+                        Text { text: "Отзыв"; color: !root.feedback-is-bug ? #101c12 : #555555; font-size: 13px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
+                    }
+                    Rectangle {
+                        width: 120px; height: 34px; border-radius: 8px;
+                        background: root.feedback-is-bug ? #a13a3a : (fb-bug.has-hover ? #2a2a2a : #1e1e1e);
+                        border-width: 1px; border-color: root.feedback-is-bug ? #a13a3a80 : #ffffff10;
+                        fb-bug := TouchArea { clicked => { root.feedback-is-bug = true; } mouse-cursor: pointer; }
+                        Text { text: "Баг"; color: root.feedback-is-bug ? #f5e5e0 : #555555; font-size: 13px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
+                    }
+                }
+                Rectangle { height: 10px; }
+
+                // Note
+                HorizontalLayout {
+                    spacing: 10px;
+                    Text { text: "Сообщение:"; color: #929292; font-size: 13px; font-weight: 600; vertical-alignment: top; width: 90px; }
+                    Rectangle {
+                        horizontal-stretch: 1; height: 90px;
+                        background: #1a1a1a; border-radius: 8px;
+                        border-width: 1px; border-color: #ffffff14; clip: true;
+                        TextInput {
+                            x: 10px; y: 8px;
+                            width: parent.width - 20px; height: parent.height - 16px;
+                            text <=> root.feedback-note;
+                            font-size: 13px; color: #e5e5e5;
+                            wrap: word-wrap; single-line: false;
+                        }
+                    }
+                }
+                Rectangle { height: 10px; }
+
+                // Result message
+                if root.feedback-result != "" : Text {
+                    text: root.feedback-result == "ok" ? "✓ Отправлено! Спасибо за обратную связь." : "Ошибка: \{root.feedback-result}";
+                    color: root.feedback-result == "ok" ? #4ac87a : #d4816e;
+                    font-size: 12.5px; wrap: word-wrap;
+                }
+                if root.feedback-result == "" : Rectangle { height: 18px; }
+                Rectangle { height: 10px; }
+
+                // Buttons
+                HorizontalLayout {
+                    height: 42px; spacing: 10px;
+                    Rectangle {
+                        horizontal-stretch: 1; border-radius: 9px;
+                        background: root.feedback-result == "ok" ? #2c2c2c
+                            : (root.feedback-submitting ? #2a5040
+                            : (fb-sub.has-hover ? #46c07a : #3ca96e));
+                        fb-sub := TouchArea {
+                            mouse-cursor: root.feedback-submitting || root.feedback-result == "ok" ? default : pointer;
+                            clicked => {
+                                if (!root.feedback-submitting && root.feedback-result != "ok") {
+                                    if (root.feedback-contact == "" || root.feedback-note == "") {
+                                        root.feedback-result = "Заполните все поля";
+                                    } else {
+                                        root.feedback-submitting = true;
+                                        root.feedback-result = "";
+                                        root.submit-feedback(
+                                            root.feedback-contact,
+                                            root.feedback-is-bug ? "bug" : "feedback",
+                                            root.feedback-note
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                        Text {
+                            text: root.feedback-submitting ? "Отправка..." : (root.feedback-result == "ok" ? "Отправлено" : "Отправить");
+                            color: root.feedback-submitting || root.feedback-result == "ok" ? #555555 : #101c12;
+                            font-size: 14px; font-weight: 700;
+                            horizontal-alignment: center; vertical-alignment: center;
+                        }
+                    }
+                    Rectangle {
+                        width: 115px; border-radius: 9px;
+                        background: fb-cls.has-hover ? #333333 : #2c2c2c;
+                        border-width: 1px; border-color: #ffffff14;
+                        fb-cls := TouchArea { clicked => { root.show-feedback-modal = false; } mouse-cursor: pointer; }
+                        Text { text: "Закрыть"; color: #929292; font-size: 13.5px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
+                    }
+                }
+            }
+        }
+    }
+
+    // ── Changelog modal ────────────────────────────────────────────────────────
+    if root.show-changelog : Rectangle {
+        x: 0; y: 0; width: parent.width; height: parent.height;
+        background: #00000099;
+        TouchArea { x: 0; y: 0; width: parent.width; height: parent.height; }
+        Rectangle {
+            x: (parent.width - 520px) / 2;
+            y: (parent.height - 400px) / 2;
+            width: 520px; height: 400px;
+            border-radius: 14px; background: #252525;
+            border-width: 1px; border-color: #ffffff18;
+            drop-shadow-blur: 48px; drop-shadow-color: #000000cc;
+            TouchArea { x: 0; y: 0; width: parent.width; height: parent.height; }
+            VerticalLayout {
+                padding: 26px; spacing: 0px;
+                Text { text: "Что нового в v\{root.app-version}"; color: #e5e5e5; font-size: 15px; font-weight: 700; }
+                Rectangle { height: 16px; }
+                Rectangle {
+                    vertical-stretch: 1;
+                    background: #1a1a1a; border-radius: 8px;
+                    border-width: 1px; border-color: #ffffff0a; clip: true;
+                    ScrollView {
+                        x: 0; y: 0; width: parent.width; height: parent.height;
+                        viewport-height: chlog-inner.preferred-height + 28px;
+                        chlog-inner := Text {
+                            x: 16px; y: 14px;
+                            width: parent.width - 32px;
+                            text: root.changelog-text != "" ? root.changelog-text : "Загрузка...";
+                            color: #929292; font-size: 13px; wrap: word-wrap;
+                        }
+                    }
+                }
+                Rectangle { height: 16px; }
+                HorizontalLayout {
+                    height: 38px; alignment: end;
+                    Rectangle {
+                        width: 115px; border-radius: 9px;
+                        background: chlog-cls.has-hover ? #333333 : #2c2c2c;
+                        border-width: 1px; border-color: #ffffff14;
+                        chlog-cls := TouchArea {
+                            clicked => { root.show-changelog = false; root.changelog-text = ""; }
+                            mouse-cursor: pointer;
+                        }
+                        Text { text: "Закрыть"; color: #929292; font-size: 13.5px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
                     }
                 }
             }

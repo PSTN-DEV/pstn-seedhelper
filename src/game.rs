@@ -32,14 +32,10 @@ pub fn validate_config(cfg: &Config) -> Result<()> {
 
 // ── INI management ────────────────────────────────────────────────────────────
 
-fn settings_path() -> PathBuf {
-    config::game_settings_path()
-}
-
 /// Write or remove the two FPS keys independently.
 /// `None` removes the key (Squad resets to its own default); `Some(n)` writes `n.000000`.
 pub fn write_fps_keys(fps: Option<u32>, menu_fps: Option<u32>) -> Result<()> {
-    let path = settings_path();
+    let path = config::game_settings_path();
     if !path.exists() {
         return Ok(());
     }
@@ -104,7 +100,7 @@ pub fn write_fps_keys(fps: Option<u32>, menu_fps: Option<u32>) -> Result<()> {
 /// Write or remove the four resolution keys.
 /// `None` removes the key; `Some(n)` writes the integer value.
 pub fn write_resolution_keys(res_x: Option<u32>, res_y: Option<u32>) -> Result<()> {
-    let path = settings_path();
+    let path = config::game_settings_path();
     if !path.exists() {
         return Ok(());
     }
@@ -205,8 +201,7 @@ pub fn find_squad_dir() -> Option<PathBuf> {
 
 /// Find squad_launcher.exe via Steam registry → libraryfolders.vdf.
 pub fn find_squad_launcher() -> Option<PathBuf> {
-    let squad_dir = detect_squad_via_steam()?;
-    let exe = squad_dir.join("squad_launcher.exe");
+    let exe = find_squad_dir()?.join("squad_launcher.exe");
     exe.exists().then_some(exe)
 }
 

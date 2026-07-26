@@ -34,12 +34,6 @@ pub struct Config {
     pub config_version: u32,
     pub steam_id: String,
 
-    // None  = fetch order from API on each seed run
-    // Some  = local override (also used as fallback when API unreachable)
-    // Migration: old Python config has "seed_order": [1,2,3,4] which loads here as Some([1,2,3,4])
-    #[serde(alias = "seed_order")]
-    pub seed_order_override: Option<Vec<u8>>,
-
     pub desired_players: u32,
     pub checkup_interval: u64,
     pub start_on_startup: bool,
@@ -50,6 +44,7 @@ pub struct Config {
     pub after_seed_action: AfterSeedAction,
     pub stop_after_server: u8,
     pub time_limit_minute: u32,
+    #[serde(default = "default_true")]
     pub time_limit_enabled: bool,
     pub preferred_fps: Option<u32>,
     pub preferred_menu_fps: Option<u32>,
@@ -57,11 +52,23 @@ pub struct Config {
     pub preferred_res_y: Option<u32>,
     pub render_toggle: bool,
     pub auto_create_squad: bool,
+    #[serde(default = "default_true")]
     pub disable_sound: bool,
+    #[serde(default = "default_true")]
     pub delete_startup_video: bool,
     pub eco_mode: bool,
+    #[serde(default = "default_true")]
     pub auto_update: bool,
     pub theme: Theme,
+    pub night_mode_enabled: bool,
+    pub night_start_hour: u32,
+    pub night_start_minute: u32,
+    pub night_end_hour: u32,
+    pub night_end_minute: u32,
+    pub night_after_action: AfterSeedAction,
+
+    pub seed_period_start_hour: u32,
+    pub seed_period_start_minute: u32,
 
     // None = disabled, Some("HH:MM") = scheduled shutdown
     // Migration: old Python config stores "" for disabled
@@ -74,7 +81,6 @@ impl Default for Config {
         Self {
             config_version: CONFIG_VERSION,
             steam_id: String::new(),
-            seed_order_override: None,
             desired_players: 65,
             checkup_interval: 60,
             start_on_startup: false,
@@ -98,9 +104,19 @@ impl Default for Config {
             auto_update: true,
             theme: Theme::Dark,
             scheduled_shutdown: None,
+            night_mode_enabled: false,
+            night_start_hour: 23,
+            night_start_minute: 0,
+            night_end_hour: 5,
+            night_end_minute: 0,
+            night_after_action: AfterSeedAction::Nothing,
+            seed_period_start_hour: 5,
+            seed_period_start_minute: 0,
         }
     }
 }
+
+fn default_true() -> bool { true }
 
 fn de_optional_string<'de, D>(de: D) -> Result<Option<String>, D::Error>
 where

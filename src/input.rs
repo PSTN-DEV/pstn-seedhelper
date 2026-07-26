@@ -14,7 +14,7 @@ pub async fn create_ingame_squad(token: &CancellationToken, log: &LogSender) {
 
     #[cfg(windows)]
     {
-        if let Err(e) = windows_create_squad(log) {
+        if let Err(e) = windows_create_squad() {
             let _ = log.send(format!("Ошибка создания сквада: {e}"));
         } else {
             let _ = log.send("Сквад создан".into());
@@ -27,7 +27,7 @@ pub async fn create_ingame_squad(token: &CancellationToken, log: &LogSender) {
 }
 
 #[cfg(windows)]
-fn windows_create_squad(log: &crate::app::LogSender) -> anyhow::Result<()> {
+fn windows_create_squad() -> anyhow::Result<()> {
     use std::mem::size_of;
     use windows::Win32::UI::Input::KeyboardAndMouse::{
         SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, VIRTUAL_KEY,
@@ -37,10 +37,6 @@ fn windows_create_squad(log: &crate::app::LogSender) -> anyhow::Result<()> {
     use windows::Win32::UI::WindowsAndMessaging::*;
     use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
     use windows::Win32::Foundation::{HWND, LPARAM, WPARAM, BOOL};
-
-    macro_rules! log {
-        ($($arg:tt)*) => { let _ = log.send(format!("{}", format!($($arg)*))); };
-    }
 
     let mut target: HWND = HWND(std::ptr::null_mut());
     unsafe extern "system" fn enum_cb(hwnd: HWND, lparam: LPARAM) -> BOOL {
@@ -62,7 +58,6 @@ fn windows_create_squad(log: &crate::app::LogSender) -> anyhow::Result<()> {
     if target.0.is_null() {
         anyhow::bail!("Окно Squad не найдено");
     }
-    // log!("Окно Squad найдено");
 
     // Sends a virtual-key INPUT event. wVk is passed through directly to WM_KEYDOWN wParam
     // without any layout translation — layout only matters when KEYEVENTF_SCANCODE is set.
@@ -84,7 +79,6 @@ fn windows_create_squad(log: &crate::app::LogSender) -> anyhow::Result<()> {
 
     unsafe {
         if IsIconic(target).as_bool() {
-            log!("Окно Squad свёрнуто, восстанавливаем");
             let _ = ShowWindow(target, SW_RESTORE);
             std::thread::sleep(std::time::Duration::from_millis(300));
         }
@@ -99,7 +93,12 @@ fn windows_create_squad(log: &crate::app::LogSender) -> anyhow::Result<()> {
             fn SetFocus(hwnd: HWND) -> HWND;
             fn SetActiveWindow(hwnd: HWND) -> HWND;
             fn SystemParametersInfoW(action: u32, param: u32, pvparam: *mut core::ffi::c_void, ini: u32) -> BOOL;
+            fn BlockInput(fBlockIt: BOOL) -> BOOL;
         }
+
+        // Block all keyboard+mouse input for the duration of squad creation
+        // so user activity can't steal focus mid-sequence.
+        let _ = BlockInput(BOOL(1));
         const SPI_GETFOREGROUNDLOCKTIMEOUT: u32 = 0x2000;
         const SPI_SETFOREGROUNDLOCKTIMEOUT: u32 = 0x2001;
 
@@ -109,24 +108,18 @@ fn windows_create_squad(log: &crate::app::LogSender) -> anyhow::Result<()> {
         let _ = SystemParametersInfoW(SPI_GETFOREGROUNDLOCKTIMEOUT, 0, &mut old_timeout as *mut u32 as *mut _, 0);
         let _ = SystemParametersInfoW(SPI_SETFOREGROUNDLOCKTIMEOUT, 0, std::ptr::null_mut(), 0);
 
+        // Keep AttachThreadInput active through the entire SendInput sequence so
+        // focus cannot drift to another window between focus-acquire and keystrokes.
         let _ = AttachThreadInput(our_tid, squad_tid, BOOL(1));
         let _ = BringWindowToTop(target);
         let _ = SetForegroundWindow(target);
         SetActiveWindow(target);
         SetFocus(target);
-        let _ = AttachThreadInput(our_tid, squad_tid, BOOL(0));
 
         std::thread::sleep(std::time::Duration::from_millis(500));
 
         // Restore system setting regardless of what happens next.
         let _ = SystemParametersInfoW(SPI_SETFOREGROUNDLOCKTIMEOUT, old_timeout, std::ptr::null_mut(), 0);
-
-        let fg = GetForegroundWindow();
-        if fg != target {
-            // log!("ВНИМАНИЕ: Фокус окна Squad переключился (fg={:?}, target={:?})", fg, target);
-        } else {
-            // log!("Фокус окна Squad — ОК");
-        }
 
         // WM_ACTIVATE + WM_SETFOCUS complete the activation handshake UE expects before
         // it starts routing key events to console logic.
@@ -143,14 +136,12 @@ fn windows_create_squad(log: &crate::app::LogSender) -> anyhow::Result<()> {
         let en_hkl = LoadKeyboardLayoutW(windows::core::w!("00000409"), KLF_ACTIVATE)
             .unwrap_or_default();
         let old_hkl = GetKeyboardLayout(squad_tid);
-        // log!("Переключаем раскладку в Squad на EN-US.");
         let _ = PostMessageW(target, WM_INPUTLANGCHANGEREQUEST, WPARAM(0), LPARAM(en_hkl.0 as isize));
         let _ = PostMessageW(target, WM_INPUTLANGCHANGE,        WPARAM(0), LPARAM(en_hkl.0 as isize));
         std::thread::sleep(std::time::Duration::from_millis(150));
 
         // Open console: VK_OEM_3 (0xC0) sent as wVk without KEYEVENTF_SCANCODE so Windows
         // passes it through verbatim — no layout translation, UE always sees VK_OEM_3.
-        // log!("Открываем консоль.");
         let _ = SendInput(
             &[vk_event(0xC0, 0x29, false), vk_event(0xC0, 0x29, true)],
             size_of::<INPUT>() as i32,
@@ -162,7 +153,6 @@ fn windows_create_squad(log: &crate::app::LogSender) -> anyhow::Result<()> {
         // KEYEVENTF_UNICODE produces VK_PACKET (0xE7) which UE's Slate console may filter;
         // real VK codes are always processed. Squad has EN-US layout active so VK_x maps
         // to the correct ASCII character regardless of the user's physical layout.
-        // log!("Создаем отряд.");
         const VK_SHIFT: u16 = 0x10;
         for ch in "CreateSquad 12 0".chars() {
             let (vk, shift) = match ch {
@@ -182,7 +172,6 @@ fn windows_create_squad(log: &crate::app::LogSender) -> anyhow::Result<()> {
         }
         std::thread::sleep(std::time::Duration::from_millis(100));
 
-        // log!("отправляем Enter");
         let _ = SendInput(
             &[vk_event(0x0D, 0x1C, false), vk_event(0x0D, 0x1C, true)],
             size_of::<INPUT>() as i32,
@@ -192,7 +181,10 @@ fn windows_create_squad(log: &crate::app::LogSender) -> anyhow::Result<()> {
         // Restore Squad's original keyboard layout.
         let _ = PostMessageW(target, WM_INPUTLANGCHANGEREQUEST, WPARAM(0), LPARAM(old_hkl.0 as isize));
         let _ = PostMessageW(target, WM_INPUTLANGCHANGE,        WPARAM(0), LPARAM(old_hkl.0 as isize));
-        // log!("Раскладка восстановлена");
+
+        // Detach after all input is sent — focus cannot drift during the sequence.
+        let _ = AttachThreadInput(our_tid, squad_tid, BOOL(0));
+        let _ = BlockInput(BOOL(0));
     }
 
     Ok(())

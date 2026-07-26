@@ -10,10 +10,10 @@ const APP_ARCH: &str = env!("APP_ARCH"); // baked in at compile time by build.rs
 
 pub const SERVER_TAGS: [(u8, &str); 4] = [(1, "A"), (2, "B"), (3, "C"), (4, "D")];
 pub const SERVER_NAMES: [(u8, &str); 4] = [
-    (1, "PSTN #1 Первый Сервер"),
-    (2, "PSTN #2 Инвага"),
-    (3, "PSTN #3 ВС РФ vs ВСУ 24/7"),
-    (4, "PSTN #4 Все режимы"),
+    (1, "PSTN #1"),
+    (2, "PSTN #2"),
+    (3, "PSTN #3"),
+    (4, "PSTN #4"),
 ];
 
 pub fn tag_for(server_num: u8) -> Option<&'static str> {
@@ -76,6 +76,12 @@ struct CheckResponse {
 #[derive(Deserialize)]
 struct VersionResponse {
     version: String,
+}
+
+#[derive(Deserialize)]
+struct ChangelogResponse {
+    version: String,
+    changelog: String,
 }
 
 // ── HubApi ───────────────────────────────────────────────────────────────────
@@ -220,6 +226,37 @@ impl HubApi {
             .await
             .map(|r| r.status().is_success())
             .unwrap_or(false)
+    }
+
+    /// POST /seed/support — submit feedback or bug report.
+    pub async fn submit_support(&self, steamid: &str, contact: &str, kind: &str, note: &str) -> Result<()> {
+        #[derive(Serialize)]
+        struct Req<'a> { steamid: &'a str, contact: &'a str, #[serde(rename = "type")] kind: &'a str, note: &'a str }
+        self.client
+            .post(format!("{SEEDING_API}/seed/support"))
+            .json(&Req { steamid, contact, kind, note })
+            .send()
+            .await
+            .context("POST /seed/support")?
+            .error_for_status()
+            .context("POST /seed/support status")?;
+        Ok(())
+    }
+
+    /// Fetch changelog for the latest stable release. Returns (version, text).
+    pub async fn get_changelog(&self) -> Result<(String, String)> {
+        let resp = self
+            .client
+            .get(format!("{HUB_API}/seeder/changelog"))
+            .send()
+            .await
+            .context("GET /seeder/changelog")?
+            .error_for_status()
+            .context("GET /seeder/changelog status")?
+            .json::<ChangelogResponse>()
+            .await
+            .context("GET /seeder/changelog parse")?;
+        Ok((resp.version, resp.changelog))
     }
 
     /// Checks /api/v1/health → {status:"ok"} — shown in the status bar.
