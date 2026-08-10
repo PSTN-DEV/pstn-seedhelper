@@ -494,6 +494,8 @@ export component AppWindow inherits Window {
     in-out property <int>    cfg-shutdown-minute: 0;
     in-out property <bool>   cfg-shutdown-enabled: false;
     in-out property <bool>   settings-dirty: false;
+    in-out property <string> cfg-launcher-path: "";
+    in-out property <bool>   debug-mode: false;
 
     // ── Callbacks ─────────────────────────────────────────────────────────
 
@@ -522,6 +524,7 @@ export component AppWindow inherits Window {
     callback confirm-after-seed-cancel();
     callback submit-feedback(string, string, string);
     callback open-changelog();
+    callback browse-launcher();
 
     in-out property <bool>   night-mode-seeding: false;
     in-out property <string> moscow-time: "";
@@ -1202,6 +1205,34 @@ export component AppWindow inherits Window {
 
                 if root.cfg-eco-mode : VerticalLayout {
                     spacing: 0px; padding-bottom: 8px;
+                    if root.debug-mode : SettingsRow { label: "Путь к squad_launcher.exe:";
+                        HorizontalLayout {
+                            spacing: 8px;
+                            LineEdit {
+                                text <=> root.cfg-launcher-path;
+                                width: 260px; height: 34px;
+                                font-family: "JetBrains Mono";
+                                font-size: 11px;
+                                placeholder-text: "Авто (Steam)";
+                            }
+                            Rectangle {
+                                width: 80px; height: 34px;
+                                background: #3c3c3c;
+                                border-radius: 6px;
+                                border-width: 1px; border-color: #ffffff18;
+                                ta-browse := TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => { root.browse-launcher(); }
+                                }
+                                Text {
+                                    text: "Обзор…";
+                                    color: #c9c9c9; font-size: 13px;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+                    }
                     SettingsRow { label: "FPS в игре после сида:";
                         HorizontalLayout {
                             spacing: 8px;

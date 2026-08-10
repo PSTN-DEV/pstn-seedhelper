@@ -1,6 +1,6 @@
 [package]
 name = "pstn-seedhelper"
-version = "4.5.0"
+version = "4.6.0"
 edition = "2021"
 
 [[bin]]
@@ -30,6 +30,8 @@ windows = { version = "0.58", features = [
     "Win32_UI_WindowsAndMessaging",
     "Win32_Storage_FileSystem",
     "Win32_System_Threading",
+    "Win32_System_LibraryLoader",
+    "Win32_Graphics_Gdi",
 ] }
 
 [build-dependencies]

@@ -47,6 +47,8 @@ pub fn setup(window: slint::Weak<AppWindow>) {
         let w = window.upgrade().unwrap();
         sync_config_to_ui(&w, &cfg);
         w.set_app_version(CURRENT_VERSION.into());
+        #[cfg(debug_assertions)]
+        w.set_debug_mode(true);
     }
 
     let state = Arc::new(AppState {
@@ -149,8 +151,9 @@ fn connect_callbacks(window: slint::Weak<AppWindow>, state: Arc<AppState>) {
     }
     {
         w.on_open_log(move || {
-            let path = config::log_path();
-            let _ = std::process::Command::new("notepad").arg(&path).spawn();
+            let _ = std::process::Command::new("explorer")
+                .arg(config::log_dir())
+                .spawn();
         });
     }
     {
@@ -324,6 +327,27 @@ fn connect_callbacks(window: slint::Weak<AppWindow>, state: Arc<AppState>) {
                 .upgrade_in_event_loop(|w| w.set_joining_active(false));
         });
     }
+    #[cfg(debug_assertions)]
+    {
+        let win = window.clone();
+        w.on_browse_launcher(move || {
+            let win = win.clone();
+            tokio::spawn(async move {
+                let picked = rfd::AsyncFileDialog::new()
+                    .set_title("Выберите squad_launcher.exe")
+                    .add_filter("Executable", &["exe"])
+                    .pick_file()
+                    .await;
+                if let Some(f) = picked {
+                    let path = f.path().to_string_lossy().to_string();
+                    let _ = win.upgrade_in_event_loop(move |w| {
+                        w.set_cfg_launcher_path(path.into());
+                        w.set_settings_dirty(true);
+                    });
+                }
+            });
+        });
+    }
     {
         let s = state.clone();
         w.on_open_changelog(move || {
@@ -479,8 +503,8 @@ fn do_start_seeding(state: Arc<AppState>) {
         w.set_seeding_active(true);
         w.set_stop_blocked(true);
     });
-    // Eco mode (windowed 1x1): stop_blocked is cleared by \x00restore_toast when INI is restored.
-    // Non-eco or render_toggle: nothing to restore, unblock after 10s.
+    // Eco mode (windowed 1x1): stop_blocked is cleared by \x00restore_toast, sent by
+    // launch_game_eco once Squad is launched. Non-eco or render_toggle: unblock after 10s.
     if !cfg.eco_mode || cfg.render_toggle {
         let win_unblock = state.window.clone();
         tokio::spawn(async move {
@@ -523,13 +547,15 @@ fn stop_seeding(state: Arc<AppState>) {
     // Synchronous restore after kill: stop_and_exit calls std::process::exit right
     // after this, and Squad rewrites resolution keys on every map change while alive.
     let cfg = state.config.lock().unwrap().clone();
-    if cfg.eco_mode {
+    let restored = cfg.eco_mode;
+    if restored {
         crate::game::restore_ini_keys(&cfg);
         state.log("Настройки FPS/разрешения восстановлены");
     }
-    let _ = state.window.upgrade_in_event_loop(|w| {
+    let _ = state.window.upgrade_in_event_loop(move |w| {
         w.set_seeding_active(false);
         w.set_stop_blocked(false);
+        if restored { w.set_restore_toast_visible(true); }
     });
 }
 
@@ -540,15 +566,17 @@ fn stop_seeding_only(state: Arc<AppState>) {
         token.cancel();
     }
     let cfg = state.config.lock().unwrap().clone();
-    if cfg.eco_mode {
+    let restored = cfg.eco_mode;
+    if restored {
         crate::game::restore_ini_keys(&cfg);
         state.log("Eco-настройки восстановлены. Squad продолжает работать.");
     } else {
         state.log("Seed остановлен. Squad продолжает работать.");
     }
-    let _ = state.window.upgrade_in_event_loop(|w| {
+    let _ = state.window.upgrade_in_event_loop(move |w| {
         w.set_seeding_active(false);
         w.set_stop_blocked(false);
+        if restored { w.set_restore_toast_visible(true); }
     });
 }
 
@@ -605,11 +633,10 @@ async fn log_consumer(mut rx: mpsc::UnboundedReceiver<String>, window: slint::We
     while let Some(raw) = rx.recv().await {
         if raw.starts_with('\x00') {
             match raw.as_str() {
+                // Only unblocks Stop. The old "settings reverted" popup was removed —
+                // it fired on normal launch too (nothing reverted), so it lied.
                 "\x00restore_toast" => {
-                    let _ = window.upgrade_in_event_loop(|w| {
-                        w.set_restore_toast_visible(true);
-                        w.set_stop_blocked(false);
-                    });
+                    let _ = window.upgrade_in_event_loop(|w| w.set_stop_blocked(false));
                 }
                 "\x00night_mode_on" => {
                     let _ = window.upgrade_in_event_loop(|w| w.set_night_mode_seeding(true));
@@ -906,6 +933,7 @@ fn sync_config_to_ui(w: &AppWindow, cfg: &Config) {
         w.set_cfg_shutdown_enabled(false);
     }
     w.set_cfg_auto_update(cfg.auto_update);
+    w.set_cfg_launcher_path(cfg.launcher_path.clone().unwrap_or_default().into());
     // Reset after all properties are set so changed-handlers don't leave dirty=true
     w.set_settings_dirty(false);
 }
@@ -962,6 +990,8 @@ fn save_settings(state: Arc<AppState>) {
             None
         };
         cfg.auto_update = w.get_cfg_auto_update();
+        let lp = w.get_cfg_launcher_path().to_string();
+        cfg.launcher_path = if lp.trim().is_empty() { None } else { Some(lp) };
 
         new_startup = cfg.start_on_startup;
         config::save(&cfg);

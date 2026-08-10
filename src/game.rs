@@ -20,7 +20,7 @@ pub fn validate_config(cfg: &Config) -> Result<()> {
                 config::game_settings_path()
             );
         }
-        if find_squad_launcher().is_none() {
+        if find_squad_launcher_with(cfg.launcher_path.as_deref()).is_none() {
             bail!("squad_launcher.exe не найден — укажите путь в настройках или установите Squad через Steam");
         }
     }
@@ -199,8 +199,18 @@ pub fn find_squad_dir() -> Option<PathBuf> {
     detect_squad_via_steam()
 }
 
-/// Find squad_launcher.exe via Steam registry → libraryfolders.vdf.
+/// Find squad_launcher.exe: prefer explicit path from config, fall back to Steam detection.
 pub fn find_squad_launcher() -> Option<PathBuf> {
+    find_squad_launcher_with(None)
+}
+
+pub fn find_squad_launcher_with(override_path: Option<&str>) -> Option<PathBuf> {
+    if let Some(p) = override_path {
+        let path = PathBuf::from(p);
+        if path.exists() {
+            return Some(path);
+        }
+    }
     let exe = find_squad_dir()?.join("squad_launcher.exe");
     exe.exists().then_some(exe)
 }
@@ -239,7 +249,7 @@ fn detect_squad_via_steam() -> Option<PathBuf> {
     for line in vdf.lines() {
         let t = line.trim();
         if t.starts_with("\"path\"") {
-            if let Some(p) = t.split('"').nth(3) {
+            if let Some(p) = t.split('"').—nth(3) {
                 let squad = PathBuf::from(p)
                     .join("steamapps")
                     .join("common")
@@ -300,48 +310,58 @@ pub async fn launch_game_eco(
 
     if cfg.render_toggle {
         args.extend([
+            "-nosound",
+            "-NoGamePad",
+            "-NoJoystick",
+            "-norelativemousemode",
+            "-fullcrashdump",
             "-nullrhi",
             "-NoAsyncPostLoad",
             "-noshaderworker",
             "-norenderthread",
             "-NoShaderCompile",
-            "-log",
             "-nosplash",
+            "-log",
         ]);
         let _ = log.send("Squad запущен без рендера. ОПАСНО!".into());
     } else {
-        args.extend(["-windowed", "-ResX=1", "-ResY=1"]);
+        args.extend([
+            "-windowed",
+            "-ResX=1",
+            "-ResY=1",
+            "-NoJoystick",
+            "-norelativemousemode",
+            "-NoGamePad",
+        ]);
         let _ = log.send("Squad запущен в эко режиме (окно 1×1)".into());
     }
     if cfg.disable_sound {
         args.push("-nosound");
     }
 
-    let launcher = find_squad_launcher()
+    let launcher = find_squad_launcher_with(cfg.launcher_path.as_deref())
         .context("squad_launcher.exe не найден — укажите путь в настройках")?;
 
     if !cfg.render_toggle {
-        write_fps_keys(Some(6), Some(100))?;
+        write_fps_keys(Some(6), Some(6))?;
     }
     std::process::Command::new(&launcher)
         .args(&args)
         .spawn()
         .context("Ошибка запуска Squad")?;
 
+    // ponytail: hold fps=6 for the whole seed; restoring after 10s raced Squad's
+    // startup read (menu+map load > 10s), so the lock never reached the engine.
+    // Cleanup restores the INI on stop/cancel (seeder.rs). Only handle early cancel here.
     if !cfg.render_toggle {
-        let _ = log.send("Ждём 10 секунд — игра читает настройки...".into());
-        tokio::select! {
-            _ = sleep(Duration::from_secs(10)) => {}
-            _ = token.cancelled() => {
-                let _ = write_fps_keys(cfg.preferred_fps, cfg.preferred_menu_fps);
-                let _ = write_resolution_keys(cfg.preferred_res_x, cfg.preferred_res_y);
-                let _ = log.send("\x00restore_toast".into());
-                return Ok(());
-            }
+        if token.is_cancelled() {
+            let _ = write_fps_keys(cfg.preferred_fps, cfg.preferred_menu_fps);
+            let _ = write_resolution_keys(cfg.preferred_res_x, cfg.preferred_res_y);
+            let _ = log.send("\x00restore_toast".into());
+            return Ok(());
         }
-
-        write_fps_keys(cfg.preferred_fps, cfg.preferred_menu_fps)?;
-        write_resolution_keys(cfg.preferred_res_x, cfg.preferred_res_y)?;
+        // Squad is launched. Unblock Stop (handler clears stop_blocked). The INI is now
+        // held at 6 and restored synchronously on stop/cancel, so stopping is always safe.
         let _ = log.send("\x00restore_toast".into());
     }
 
@@ -367,7 +387,7 @@ pub async fn launch_game_steam(
 ) -> Result<()> {
     if cfg.disable_sound {
         // Steam URL with launch args triggers a confirmation dialog; use launcher directly instead.
-        let launcher = find_squad_launcher()
+        let launcher = find_squad_launcher_with(cfg.launcher_path.as_deref())
             .context("squad_launcher.exe не найден — укажите путь в настройках")?;
         std::process::Command::new(&launcher)
             .arg("-nosound")

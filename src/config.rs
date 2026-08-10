@@ -70,6 +70,8 @@ pub struct Config {
     pub seed_period_start_hour: u32,
     pub seed_period_start_minute: u32,
 
+    pub launcher_path: Option<String>,
+
     // None = disabled, Some("HH:MM") = scheduled shutdown
     // Migration: old Python config stores "" for disabled
     #[serde(deserialize_with = "de_optional_string")]
@@ -112,6 +114,7 @@ impl Default for Config {
             night_after_action: AfterSeedAction::Nothing,
             seed_period_start_hour: 5,
             seed_period_start_minute: 0,
+            launcher_path: None,
         }
     }
 }
@@ -155,8 +158,38 @@ pub fn config_path() -> PathBuf {
     config_dir().join("config.json")
 }
 
+pub fn log_dir() -> PathBuf {
+    config_dir().join("logs")
+}
+
+/// Today's log file. Path is date-stamped, so the append-writer rolls to a new
+/// file automatically at midnight — no rotation logic needed.
 pub fn log_path() -> PathBuf {
-    config_dir().join("seed_debug.log")
+    let day = chrono::Local::now().format("%Y-%m-%d");
+    log_dir().join(format!("seed_{day}.log"))
+}
+
+/// Create the logs dir and delete anything older than 7 days. Called once at startup.
+pub fn setup_logs() {
+    let dir = log_dir();
+    let _ = std::fs::create_dir_all(&dir);
+    // Pre-4.5 single log file, now superseded by per-day files in logs/.
+    let _ = std::fs::remove_file(config_dir().join("seed_debug.log"));
+    let cutoff = chrono::Local::now().date_naive() - chrono::Duration::days(7);
+    let Ok(entries) = std::fs::read_dir(&dir) else { return };
+    for e in entries.flatten() {
+        let name = e.file_name();
+        let Some(name) = name.to_str() else { continue };
+        // seed_YYYY-MM-DD.log
+        let Some(date) = name.strip_prefix("seed_").and_then(|s| s.strip_suffix(".log")) else {
+            continue;
+        };
+        if let Ok(d) = chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d") {
+            if d < cutoff {
+                let _ = std::fs::remove_file(e.path());
+            }
+        }
+    }
 }
 
 pub fn game_settings_path() -> PathBuf {
@@ -208,6 +241,7 @@ fn hide_dir(path: &std::path::Path) {
 
 pub fn load() -> Config {
     ensure_config_dir();
+    setup_logs();
     let path = config_path();
 
     // First run after path change: pull config from old location

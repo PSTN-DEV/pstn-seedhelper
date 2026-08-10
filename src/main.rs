@@ -4,6 +4,8 @@ mod api;
 mod app;
 mod config;
 mod game;
+#[cfg(windows)]
+mod guard;
 mod input;
 mod platform;
 mod process;
