@@ -16,6 +16,13 @@ mod updater;
 slint::include_modules!();
 
 fn main() {
+    // Debug-only: preview the squad-creation overlay without seeding. Esc or 20s to close.
+    #[cfg(all(windows, debug_assertions))]
+    if std::env::args().any(|a| a == "--preview-overlay") {
+        unsafe { guard::preview(); }
+        return;
+    }
+
     env_logger::Builder::from_default_env()
         .filter_level(log::LevelFilter::Info)
         .init();

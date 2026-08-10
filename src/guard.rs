@@ -26,13 +26,15 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 pub const MAGIC: usize = 0x5EED_5EED;
 const PANIC_VK: u32 = 0x7B; // VK_F12
 
-// Colours are COLORREF (0x00BBGGRR).
-const CK_MAGENTA: u32 = 0x00FF_00FF; // colour-key → transparent
-const PINK: u32 = 0x008C_5ADC; // RGB(220,90,140) — stripe + panel accent
-const BOX_BG: u32 = 0x0014_1414; // #141414 panel, matches the app
-const TITLE: u32 = 0x00D0_C0F0; // soft pink-white
+// Colours are COLORREF (0x00BBGGRR). Tunables — bump for more presence, drop for calmer.
+const DIM: u32 = 0x000A_0808; // near-black wash that gently darkens the whole screen
+const PINK: u32 = 0x0096_78BE; // RGB(190,120,150) — muted dusty rose, easy on the eyes
+const BOX_BG: u32 = 0x001A_1414; // #14141a panel, matches the app
+const TITLE: u32 = 0x00D8_CCE8; // soft pink-white
 const SUB: u32 = 0x0092_9292; // muted grey (app text-secondary)
-const WIN_ALPHA: u8 = 200;
+const WIN_ALPHA: u8 = 120; // whole-overlay opacity = how strong the dim is (0..255)
+const BORDER_W: i32 = 5; // dashed frame thickness
+const BORDER_INSET: i32 = 12; // frame distance from the screen edge
 
 static ABORT: AtomicBool = AtomicBool::new(false);
 static KB_HOOK: AtomicIsize = AtomicIsize::new(0);
@@ -112,22 +114,21 @@ unsafe fn paint(hwnd: HWND, hdc: HDC) {
     let w = rc.right - rc.left;
     let h = rc.bottom - rc.top;
 
-    // Transparent background (colour-keyed away).
-    let bg = CreateSolidBrush(COLORREF(CK_MAGENTA));
+    // Gentle dark wash over the whole screen (uniform WIN_ALPHA opacity).
+    let bg = CreateSolidBrush(COLORREF(DIM));
     FillRect(hdc, &rc, bg);
     let _ = DeleteObject(bg);
 
-    // Thin pink diagonal stripes (bottom-left → top-right).
-    let pen = CreatePen(PS_SOLID, 7, COLORREF(PINK));
-    let old = SelectObject(hdc, pen);
-    let mut x = -h;
-    while x < w + h {
-        let _ = MoveToEx(hdc, x, h, None);
-        let _ = LineTo(hdc, x + h, 0);
-        x += 46;
-    }
-    SelectObject(hdc, old);
-    let _ = DeleteObject(pen);
+    // Pink dashed frame just inside each screen's edge.
+    let lb = LOGBRUSH { lbStyle: BS_SOLID, lbColor: COLORREF(PINK), lbHatch: 0 };
+    let bpen = ExtCreatePen(PS_GEOMETRIC | PS_DASH | PS_ENDCAP_FLAT, BORDER_W as u32, &lb, None);
+    let nullbr = GetStockObject(NULL_BRUSH);
+    let ob = SelectObject(hdc, nullbr);
+    let op = SelectObject(hdc, bpen);
+    let _ = RoundRect(hdc, BORDER_INSET, BORDER_INSET, w - BORDER_INSET, h - BORDER_INSET, 48, 48);
+    SelectObject(hdc, ob);
+    SelectObject(hdc, op);
+    let _ = DeleteObject(bpen);
 
     // Centre panel + text on the primary monitor only.
     if GetWindowLongPtrW(hwnd, GWLP_USERDATA) != 0 {
@@ -199,7 +200,7 @@ unsafe extern "system" fn mon_cb(hmon: HMONITOR, _hdc: HDC, _rc: *mut RECT, lpar
         return BOOL(1);
     }
     SetWindowLongPtrW(hwnd, GWLP_USERDATA, if primary { 1 } else { 0 });
-    let _ = SetLayeredWindowAttributes(hwnd, COLORREF(CK_MAGENTA), WIN_ALPHA, LWA_COLORKEY | LWA_ALPHA);
+    let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), WIN_ALPHA, LWA_ALPHA);
     let _ = SetWindowPos(hwnd, HWND_TOPMOST, r.left, r.top, r.right - r.left, r.bottom - r.top,
         SWP_NOACTIVATE | SWP_SHOWWINDOW);
     let _ = UpdateWindow(hwnd);
@@ -237,6 +238,31 @@ pub unsafe fn begin() -> Vec<HWND> {
 pub unsafe fn end(overlays: &[HWND]) {
     remove_hooks();
     for &h in overlays {
+        let _ = DestroyWindow(h);
+    }
+}
+
+/// Debug-only: show just the overlay (no hooks, so your input still works) until Esc or
+/// 20s. Lets you eyeball the look without running a real seed. Run: `--preview-overlay`.
+#[cfg(debug_assertions)]
+pub unsafe fn preview() {
+    use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
+    let overlays = create_overlays();
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        let mut msg = MSG::default();
+        while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
+            let _ = TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+        }
+        // F12 (the real panic key) or Esc closes the preview.
+        let down = |vk: i32| (GetAsyncKeyState(vk) as u16 & 0x8000) != 0;
+        if down(PANIC_VK as i32) || down(0x1B) || Instant::now() >= deadline {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    for &h in &overlays {
         let _ = DestroyWindow(h);
     }
 }
