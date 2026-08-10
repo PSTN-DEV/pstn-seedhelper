@@ -249,7 +249,7 @@ fn detect_squad_via_steam() -> Option<PathBuf> {
     for line in vdf.lines() {
         let t = line.trim();
         if t.starts_with("\"path\"") {
-            if let Some(p) = t.split('"').—nth(3) {
+            if let Some(p) = t.split('"').nth(3) {
                 let squad = PathBuf::from(p)
                     .join("steamapps")
                     .join("common")
