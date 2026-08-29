@@ -237,7 +237,7 @@ fn connect_callbacks(window: slint::Weak<AppWindow>, state: Arc<AppState>) {
     {
         w.on_open_website(|| {
             let mut cmd = std::process::Command::new("cmd");
-            cmd.args(["/c", "start", "", "https://pstnsquad.ru/"]);
+            cmd.args(["/c", "start", "", "https://pstnsquad.com/"]);
             let _ = spawn_hidden(&mut cmd);
         });
     }

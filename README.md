@@ -1,6 +1,6 @@
 # Seed Helper
 
-Легкое приложение на Windows от [PSTN Squad](https://pstnsquad.ru) которое облегчает seeding серверов PSTN в Squad.
+Легкое приложение на Windows от [PSTN Squad](https://pstnsquad.com) которое облегчает seeding серверов PSTN в Squad.
 
 ## Установка
 

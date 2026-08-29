@@ -4,8 +4,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::Duration;
 
-const HUB_API: &str = "https://api.hub.pstnsquad.ru/api/v1/public";
-const SEEDING_API: &str = "https://seeding.pstnsquad.ru/api";
+const HUB_API: &str = "https://api.hub.pstnsquad.com/api/v1/public";
+const SEEDING_API: &str = "https://api.pstnsquad.com/api";
 const APP_ARCH: &str = env!("APP_ARCH"); // baked in at compile time by build.rs
 
 pub const SERVER_TAGS: [(u8, &str); 4] = [(1, "A"), (2, "B"), (3, "C"), (4, "D")];
@@ -264,7 +264,7 @@ impl HubApi {
         #[derive(Deserialize)]
         struct Resp { status: String }
         match self.client
-            .get("https://api.hub.pstnsquad.ru/api/v1/health")
+            .get("https://api.hub.pstnsquad.com/api/v1/health")
             .timeout(Duration::from_secs(5))
             .send()
             .await
