@@ -273,17 +273,17 @@ pub fn remove_welcome_video(log: &LogSender) {
             return;
         }
     };
-    let video = squad_dir
-        .join("SquadGame")
-        .join("Content")
-        .join("Movies")
-        .join("welcome_to_squad.mp4");
+    let movies = squad_dir.join("SquadGame").join("Content").join("Movies");
 
-    if video.exists() {
-        if let Err(e) = std::fs::remove_file(&video) {
-            let _ = log.send(format!("Не удалось удалить видео: {e}"));
-        } else {
-            let _ = log.send("Удалено welcome_to_squad.mp4".into());
+    // Older builds ship .mp4, newer ship .bk2
+    for name in ["welcome_to_squad.mp4", "welcome_to_squad.bk2"] {
+        let video = movies.join(name);
+        if video.exists() {
+            if let Err(e) = std::fs::remove_file(&video) {
+                let _ = log.send(format!("Не удалось удалить видео: {e}"));
+            } else {
+                let _ = log.send(format!("Удалено {name}"));
+            }
         }
     }
 }
