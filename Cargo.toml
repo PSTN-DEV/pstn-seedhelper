@@ -1,6 +1,6 @@
 [package]
 name = "pstn-seedhelper"
-version = "4.6.3"
+version = "4.6.6"
 edition = "2021"
 
 [[bin]]
